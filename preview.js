@@ -2501,12 +2501,148 @@ class BattleRenderer {
 module.exports={BattleRenderer};
 
 },
+"src/onboarding.js":function(require,module,exports){
+const C = require('../engine/campaign.js');
+const E = require('../engine/engine.js');
+const J = require('../engine/journey.js');
+
+const enemy = (type, count) => [
+  ...Array.from({length: 5}, (_, i) => ({id: `drill-${i}`, type, count, x: 20, y: 3 + i * 3})),
+  {id: 'drill-general', type: 'commander', count: 1, x: 25, y: 9}
+];
+const LESSONS = [
+  {id: 'victory', name: '擒贼先擒王', short: '认识胜负', icon: '帅',
+    lines: ['击败敌方主将，就能赢下战斗。', '这一战先观察，不需要操作士兵。'],
+    config: {heroId: 'liubei', troops: ['bladeShield', 'spear', 'bladeShield', 'spear', 'bladeShield'], preset: 'balanced'},
+    enemy: enemy('bladeShield', 3), heroId: 'liubei',
+    takeaway: ['斩将即可获胜，不必清空所有士兵。', '主将与士兵自动交战，满蓝自动施法。']},
+  {id: 'counter', name: '以枪止骑', short: '亲手换兵', icon: '枪',
+    lines: ['敌人全是骑兵，刀盾会吃亏。', '换两队长枪，试试克制的力量。'],
+    config: {heroId: 'liubei', troops: Array(5).fill('bladeShield'), preset: 'balanced'},
+    enemy: enemy('cavalry', 5), heroId: 'liubei',
+    takeaway: ['同样三十兵，换兵就能改变战局。', '长枪拦骑兵；刀盾挡箭；弓兵怕近身。']},
+  {id: 'formation', name: '将兵成阵', short: '换将与布阵', icon: '阵',
+    lines: ['借来黄忠与弓兵，练一场护弓战。', '选对主将，再让前排护住弓阵。'],
+    config: {heroId: 'liubei', troops: ['bladeShield', 'bladeShield', 'archer', 'archer', 'archer'], preset: 'balanced'},
+    enemy: enemy('spear', 6), heroId: 'liubei',
+    takeaway: ['黄忠增强弓兵，盾墙把前后排收拢。', '借用的将与阵，会在主线中正式解锁。']}
+];
+
+const HELP = {
+  map: {name: '出征', icon: '旗', lines: ['胜利解锁新将、兵种和阵型。', '先看敌军，再决定自己的搭配。'], extra: ['第一章逐关推进，后续章节有可选路线。', '失败不扣兵力，可以立刻调整再战。']},
+  prepare: {name: '排兵布阵', icon: '阵', lines: ['点编号编队换兵，点主将换人。', '换阵型调整站位，准备好再出战。'], extra: ['每军一名主将，五队士兵，每队六人。', '只换兵种不会移动原来的编队。']},
+  heroes: {name: '武将与技能', icon: '将', lines: ['升级统帅，提升属性并获得技能点。', '点亮节点强化武将；重配免费。'], extra: ['统帅等级共享，三名武将分别加点。', '蓝条蓄满后自动施法，不需要手动点技能。']},
+  barracks: {name: '兵营训练', icon: '兵', lines: ['军功用于训练兵种，增强生命与伤害。', '训练对所有编队中的同类士兵生效。'], extra: ['每级生命、伤害 +6%，不会增加人数。', '换路线时可以退还训练军功，重新分配。']},
+  missions: {name: '支线与补给', icon: '粮', lines: ['卡关时可以先剿匪、守营赚军功。', '没有全胜，也能按完成度领取奖励。'], extra: ['每项支线每日最多 3 军功，按最佳成绩补差额。', '营地每 20 分钟积存 1 军功，最多积存 12。']},
+  relay: {name: '三军接力', icon: '叁', lines: ['三支军队依次出战，胜军带伤迎战。', '先军即使败了，也能为后军消耗敌人。'], extra: ['残兵、生命与蓝量保留到下一次接战。', '先排好三军，再调整出场顺序。']}
+};
+
+function clean(raw, returning) {
+  const x = raw && typeof raw === 'object' ? raw : {};
+  const passed = [];
+  for (const l of LESSONS) {if (x.passed?.includes(l.id)) passed.push(l.id); else break;}
+  const status = ['new', 'learning', 'camp', 'done', 'skipped'].includes(x.status) ? x.status : returning ? 'skipped' : 'new';
+  const seen = Object.fromEntries(Object.entries(x.seen || {}).filter(([k, v]) => typeof k === 'string' && k.length < 80 && v === true));
+  return {status, passed, rewarded: passed.length === 3 && x.rewarded === true,
+    camp: {troop: x.camp?.troop === true, hero: x.camp?.hero === true, talent: x.camp?.talent === true}, seen};
+}
+function createRun(index, config) {
+  const lesson = LESSONS[index], c = C.sanitizeCampaignConfig(config || lesson.config);
+  const battle = E.createLabBattle({blue: c.formation, red: lesson.enemy, scenarioId: `academy-${lesson.id}`,
+    aiMode: 'roles', combatVersion: E.CAMPAIGN_COMBAT_VERSION, heroes: {blue: c.heroId, red: lesson.heroId}});
+  battle.status = 'running';
+  return {mode: 'academy', lesson: index, levelId: lesson.id, battle, mission: null, settled: false};
+}
+function settle(p, run) {
+  const g = p.guide, won = run.battle.status === 'won', id = LESSONS[run.lesson].id;
+  if (won && !g.passed.includes(id) && g.passed.length === run.lesson) g.passed.push(id);
+  let reward = 0;
+  if (g.passed.length === 3 && !g.rewarded) {reward = 9; p.reserve += reward; g.rewarded = true;}
+  if (won && run.lesson === 2 && g.status !== 'done') g.status = 'camp';
+  return {won, reward, first: reward > 0, unlocked: [], time: run.battle.time, rounds: 1, lesson: run.lesson};
+}
+function tools(a) {
+  return a.lesson === 2 ? {heroes: ['liubei', 'huangzhong'], troops: ['bladeShield', 'spear', 'archer'], formations: ['balanced', 'shieldWall']} :
+    {heroes: ['liubei'], troops: ['bladeShield', 'spear'], formations: ['balanced']};
+}
+function info(id, title, lines, rect, label = '明白了') {return {id, title, lines, rect, label, action: 'guide:ack'};}
+function action(id, title, lines, target) {return {id, title, lines, target};}
+
+// Derive each instruction from real state, so closing/reopening a picker or
+// resuming an interrupted lesson cannot advance a task that was never performed.
+function coach(a) {
+  const p = a.p, g = p.guide, seen = g.seen;
+  if (a.sheet?.type === 'help' || a.screen === 'welcome' || a.screen === 'academy' || a.screen === 'manual') return null;
+  if (a.mode === 'academy') {
+    const l = LESSONS[a.lesson], c = a.practiceConfig;
+    if (a.screen === 'prepare') {
+      const id = `lesson-${l.id}`;
+      if (!seen[id]) return info(id, l.name, l.lines, {x: 200, y: 168, w: 170, h: 270}, '开始练习');
+      if (a.lesson === 1) {
+        const slot = [0, 4].find(i => c.troops[i] !== 'spear');
+        if (slot !== undefined) {
+          if (a.sheet?.type === 'troop') return action('counter-pick', '长枪迎敌', ['长枪对骑兵有优势。', '点长枪，替换这队刀盾。'], 'troop:spear');
+          return action('counter-slot', slot === 0 ? '先换上路这一队' : '再守住下路', ['点亮起的编队，换成长枪。', '队伍编号与站位不会改变。'], `slot:c-slot-${slot + 1}`);
+        }
+      }
+      if (a.lesson === 2) {
+        if (c.heroId !== 'huangzhong') return a.sheet?.type === 'hero' ?
+          action('hero-pick', '黄忠统领弓阵', ['黄忠让弓兵伤害提升 20%。', '主将要与带领的士兵配合。'], 'pickhero:huangzhong') :
+          action('hero-open', '先换一位主将', ['这里借用黄忠，不消耗你的资源。', '点「换将」，让他带领弓兵。'], 'edit:hero');
+        if (c.preset !== 'shieldWall') return a.sheet?.type === 'formation' ?
+          action('form-pick', '盾墙护弓', ['前排收紧，弓兵集中在后。', '点盾墙阵，观察站位变化。'], 'form:shieldWall') :
+          action('form-open', '再选阵型', ['阵型会改变接敌顺序。', '让刀盾站到弓兵前面。'], 'edit:formation');
+      }
+      return action('academy-start', '准备就绪', [a.lesson === 0 ? '士兵和主将都会主动寻找敌人。' : '保持兵力不变，看看调整后的结果。', '点击出战，战斗会自动进行。'], 'start');
+    }
+    if (a.screen === 'battle' && a.run.battle.status === 'running') {
+      if (a.lesson === 0 && !seen['battle-goal']) return {...info('battle-goal', '盯住敌方主将', ['上方是主将生命与蓝量。', '击败敌将即获胜，也要保护自己的主将。'], {x: 210, y: 82, w: 157, h: 62}, '开始观战'), freeze: true};
+      if (a.lesson === 0 && !seen['battle-skill'] && a.run.battle.events.some(e => e.type === 'skill' && e.side === 'blue')) return {...info('battle-skill', '满蓝，自动施法', ['刘备刚刚为附近士兵回血、加盾。', '无需操作，技能会随蓝量循环释放。'], {x: 20, y: 82, w: 160, h: 62}, '继续观战'), freeze: true};
+    }
+    return null;
+  }
+  if (g.status === 'camp' && ['camp', 'heroes', 'barracks'].includes(a.screen)) {
+    const cost = !g.camp.troop ? 4 : !g.camp.hero ? 5 : 0;
+    if (cost > J.earnedMerit(p.journey) + p.reserve - J.trainingCost(p.journey.training))
+      return {...info('camp-funds', '先去获得一些军功', ['军功已用于其他训练，不必重置。', '先出征或领取补给，回营后可继续学习。'], null, '先去出征'), action: 'guide:defer'};
+    if (!g.camp.troop) {
+      if (a.screen !== 'barracks') return action('camp-barracks', '把战功变成战力', ['演武首通获得 9 军功。', '先去兵营，训练刚刚用过的长枪。'], 'nav:barracks');
+      return action('camp-train', '训练一次长枪兵', ['花费 4 军功，生命与伤害 +6%。', '所有长枪编队都会受益。'], 'train:spear');
+    }
+    if (!g.camp.hero) {
+      if (a.screen !== 'heroes') return action('camp-heroes', '再培养统帅', ['剩余军功可以用于统帅升级。', '点武将，看看另一种成长。'], 'nav:heroes');
+      return action('camp-upgrade', '统帅升到 2 级', ['花费 5 军功，提升属性并增加技能点。', '统帅等级由所有已招募武将共享。'], 'train:hero');
+    }
+    if (!g.camp.talent) {
+      if (a.screen !== 'heroes') return action('camp-tree', '还有技能点可用', ['技能点由升级与主线进度获得。', '去武将页，完成第一次加点。'], 'nav:heroes');
+      if (a.hero !== 'liubei') return action('camp-liubei', '先培养刘备', ['每位武将都有独立的技能树。', '先选已经招募的刘备。'], 'hero:liubei');
+      if (a.sheet?.type === 'talent') return action('camp-learn', '点亮武艺', ['消耗 1 技能点，主将伤害 +8%。', '之后可以免费重配，不怕选错。'], 'learn:valor');
+      return action('camp-talent', '试一次技能加点', ['点武艺节点，查看它的效果。', '之后还可以选择回蓝与统军方向。'], 'talent:valor');
+    }
+    return {...info('graduate', '可以独当一面了', ['出征解锁新兵种，遇到强敌先换阵。', '卡关还能做支线，或回营领取补给。'], null, '正式出征'), action: 'guide:finish'};
+  }
+  if (a.screen === 'prepare' && !a.sheet && ['raid', 'guard'].includes(a.mode) && !seen[`module-${a.mode}`]) {
+    return a.mode === 'raid' ? info('module-raid', '剿匪：按歼敌数领奖', ['击杀 8 / 16 / 24 名士兵，逐档获军功。', '不必斩将；完成一档就有收获。'], null, '准备剿匪') :
+      info('module-guard', '守营：让主将活下来', ['坚持 20 / 35 / 50 秒，逐档获军功。', '护住主将，别急着冲进敌阵。'], null, '准备守营');
+  }
+  const key = a.screen === 'prepare' && a.mode === 'relay' ? 'relay' : a.screen;
+  if (!a.sheet && HELP[key] && !seen[`module-${key}`]) {
+    const h = HELP[key];
+    return info(`module-${key}`, h.name, h.lines, key === 'relay' ? {x: 20, y: 82, w: 350, h: 42} : null, '开始尝试');
+  }
+  if (a.screen === 'result' && !a.result.won && !seen['first-defeat']) return info('first-defeat', '失败后，有三条路', ['换兵换阵再试；去练兵提升战力；', '或做支线赚军功，失败不会扣兵。'], null, '重整旗鼓');
+  return null;
+}
+module.exports = {LESSONS, HELP, clean, createRun, settle, tools, coach};
+
+},
 "src/core.js":function(require,module,exports){
 const J=require('../engine/journey.js');
 const M=require('../engine/missions.js');
 const C=require('../engine/campaign.js');
 const E=require('../engine/engine.js');
 const H=require('../engine/heroes.js');
+const O=require('./onboarding.js');
 const clone=x=>JSON.parse(JSON.stringify(x));
 const KEY='commander-camp-v3';
 const HERO_IDS=H.HEROES.map(h=>h.id);
@@ -2528,7 +2664,7 @@ function clean(input={},legacy=null,now=Date.now()){
  // understands campaign merit, so validate training against the combined budget.
  const reserve=int(raw.reserve,0,1000000),training=J.cleanTraining(raw.journey?.training||journey.training,journey);
  if(J.trainingCost(training)<=J.earnedMerit(journey)+reserve)journey.training=training;
- const p={schema:3,journey,reserve,lastClaim:Number.isFinite(raw.lastClaim)?int(raw.lastClaim,now-86400000,now):now,talents:{},armies:[],sound:raw.sound!==false};
+ const p={schema:3,journey,reserve,lastClaim:Number.isFinite(raw.lastClaim)?int(raw.lastClaim,now-86400000,now):now,talents:{},armies:[],sound:raw.sound!==false,guide:O.clean(raw.guide,Boolean(raw.journey||legacy))};
  for(const hero of HERO_IDS){const tree={};for(const t of TALENTS){tree[t.id]=int(raw.talents?.[hero]?.[t.id],0,t.max);if(t.parent&&(tree[t.parent]||0)<t.need)tree[t.id]=0;}p.talents[hero]=spent(tree)<=points(p)?tree:{};}
  p.armies=M.cleanArmies(raw.armies,p.journey);return p;
 }
@@ -2561,7 +2697,8 @@ function applyTalents(b,p){
  const types=id==='liubei'?['bladeShield','spear']:id==='huangzhong'?['archer']:['cavalry'];
  for(const u of b.units.filter(u=>u.side==='blue'&&types.includes(u.type))){u.damageMultiplier=(u.damageMultiplier||1)*(1+.04*(t.command||0));u.speedMultiplier=(u.speedMultiplier||1)*(1+.04*(t.march||0));}
 }
-function start(p,mode='main',levelId=p.journey.levelId){
+function start(p,mode='main',levelId=p.journey.levelId,config){
+ if(mode==='academy')return O.createRun(levelId,config);
  const training=clone(p.journey.training);let battle,mission=null;
  if(mode==='main'){
   // Apply camp training once, including training funded by offline income.
@@ -2587,6 +2724,7 @@ function finish(p,run){
  if(run.settled)return null;
  if(run.mission?run.mission.status!=='finished':['ready','running'].includes(run.battle.status))return null;
  run.settled=true;
+ if(run.mode==='academy')return O.settle(p,run);
  const training=clone(p.journey.training),before=J.unlocksFor(p.journey);
  const out=run.mission?M.settleMission(p.journey,run.mission):J.settleBattle(p.journey,run.battle);
  p.journey=out.profile;p.journey.training=training;
@@ -2601,6 +2739,7 @@ module.exports={KEY,J,M,C,E,H,TALENTS,HERO_IDS,clone,clean,money,supply,claim,po
 },
 "src/view.js":function(require,module,exports){
 const G=require('./core.js');
+const O=require('./onboarding.js');
 const {BattleRenderer}=require('../engine/renderer.js');
 const COLORS={bg:'#101f20',panel:'#1a3031',line:'#36504b',ink:'#f1e8ce',muted:'#98aaa0',gold:'#e2c181',green:'#9acbb0',red:'#df947f'};
 const NAMES={bladeShield:'刀盾',spear:'长枪',archer:'弓兵',cavalry:'骑兵',liubei:'刘备',huangzhong:'黄忠',zhaoyun:'赵云',balanced:'均衡阵',shieldWall:'盾墙阵',spearhead:'锋矢阵',wings:'鹤翼阵'};
@@ -2609,6 +2748,74 @@ const SHORT={bladeShield:'盾',spear:'枪',archer:'弓',cavalry:'骑'};
 class View{
  constructor(c,a){this.c=c;this.a=a;this.r=Object.create(BattleRenderer.prototype);Object.assign(this.r,{ctx:c,previous:new Map(),deaths:[],visualHits:[],lastTime:0,frame:0});}
  resetBattle(){this.r.reset();}
+ guideSnapshot(){return O.coach(this.a);}
+ welcome(){
+  this.title('夺帅','你，是这支军队的新统领。');this.campArt();
+  this.text('接过军旗，从第一战开始',195,437,23,COLORS.ink,'center','600');
+  this.text('看清敌人，排好队伍，夺下主将。',195,478,15,COLORS.muted,'center');
+  this.text('三场短战，亲手学会如何赢。',195,507,14,COLORS.muted,'center');
+  this.button('academy:start','开始新兵演武',20,551,350,60,true);
+  this.button('academy:skip','我已熟悉，直接入营',20,633,350,48);
+  this.text('可以随时离开，也可以回营继续练习',195,725,12,COLORS.muted,'center');
+ }
+ academy(){
+  const g=this.a.p.guide;this.back('新兵演武');
+  this.text('三场实战 → 练兵与加点 → 正式出征',195,99,13,COLORS.muted,'center');
+  O.LESSONS.forEach((l,i)=>{const y=135+i*145,done=g.passed.includes(l.id),open=i<=g.passed.length;
+   this.box(20,y,350,126);this.badge(done?'✓':l.icon,54,y+38,done?COLORS.green:COLORS.gold);
+   this.text(`${i+1} · ${l.name}`,90,y+32,20);this.text(l.short,90,y+61,13,COLORS.muted);
+   this.text(done?'已掌握':open?'待演练':'先完成上一场',38,y+100,12,COLORS.muted);
+   if(open)this.button(`academy:${i}`,done?'重练':'开始',255,y+78,98,36,!done);
+  });
+  this.text(g.rewarded?'演武奖励已领取 · 重练不会重复发放':'三场首通获 9 军功，用于练兵与升级',195,601,13,COLORS.gold,'center');
+  this.button('academy:start',g.passed.length===3&&g.status!=='done'?'继续营地养成引导':g.passed.length===3?'从第一场重练':'继续学习',20,642,350,54,true);
+  this.button('nav:manual','翻阅兵书',20,715,350,42);
+ }
+ manual(){
+  this.back('兵书');this.text('想了解哪里，就点哪里',195,100,14,COLORS.muted,'center');
+  Object.entries(O.HELP).forEach(([id,h],i)=>{const x=20+i%2*180,y=139+Math.floor(i/2)*164;
+   this.box(x,y,170,142);this.badge(h.icon,x+85,y+39);this.text(h.name,x+85,y+89,17,COLORS.ink,'center','600');
+   this.text('查看 ›',x+85,y+119,12,COLORS.muted,'center');this.hit(`help:${id}`,x,y,170,142);
+  });
+  this.button('nav:academy','实际练一遍 ›',20,675,350,54,true);
+ }
+ academyResult(){
+  const a=this.a,r=a.result,l=O.LESSONS[a.lesson];
+  this.title(r.won?'这一招，学会了':'再调整一次',`演武 ${a.lesson+1} / 3 · ${l.name}`);
+  for(let i=0;i<3;i++){const x=111+i*84;this.circle(x,149,18,i<=a.lesson&&r.won?'#647c50':'#294137');this.text(i+1,x,149,15,COLORS.gold,'center');if(i<2)this.line(x+23,149,x+61,149);}
+  this.circle(195,274,65,'#304f3e');this.text(r.won?l.icon:'再',195,270,60,COLORS.gold,'center','600');
+  this.text(r.won?l.short:'先检查编队，再出战',195,382,22,COLORS.ink,'center','600');
+  const lines=r.won?l.takeaway:l.lines;lines.forEach((v,i)=>this.text(v,195,428+i*30,14,COLORS.muted,'center'));
+  if(r.reward)this.text(`首通奖励  +${r.reward} 军功`,195,509,20,COLORS.gold,'center');
+  else this.text('演武不消耗兵力，也不改动主线进度',195,509,12,COLORS.muted,'center');
+  this.button(r.won?'academy:next':'retry',r.won?a.lesson===2?a.p.guide.status==='done'?'返回营地':'回营练兵与加点':'下一场演武':'调整后再试',20,570,350,58,true);
+  this.button('nav:academy','返回演武场',20,656,350,48);
+ }
+ coach(){
+  const a=this.a,h=O.coach(a);if(!h)return;
+  const source=[...a.hits].reverse().find(x=>x.id===h.target);
+  // Never leave a blocking instruction on a screen without its real target.
+  if(h.target&&!source)return;
+  const r=source||h.rect,c=this.c;
+  c.fillStyle='#071513d9';
+  if(r){const x=Math.max(0,r.x-5),y=Math.max(0,r.y-5),w=Math.min(390-x,r.w+10),height=r.h+10;
+   c.fillRect(0,0,390,y);c.fillRect(0,y,x,height);c.fillRect(x+w,y,390-x-w,height);c.fillRect(0,y+height,390,780-y-height);
+   this.box(x,y,w,height,'#ffffff00',12,COLORS.gold);
+  }else c.fillRect(0,0,390,780);
+  a.hits=source?[source]:[];
+  const guided=a.mode==='academy'||a.p.guide.status==='camp';
+  this.box(12,12,366,44,COLORS.bg,12);
+  this.text(guided?a.mode==='academy'?`新兵演武 ${a.lesson+1} / 3`:'营地养成':'军师提示',24,34,13,COLORS.gold);
+  this.text(guided?'稍后再学':'关闭',360,34,12,COLORS.muted,'right');this.hit('guide:exit',276,12,100,44);
+  const height=source?126:162;
+  const choices=source?[r.y>450?Math.max(96,r.y-height-30):r.y+r.h+24,490,84,300]:[r&&r.y>200?76:342,478,90];
+  const y=choices.find(v=>v>=72&&v+height<=768&&(!r||v+height<r.y-8||v>r.y+r.h+8))??478;
+  this.box(20,y,350,height,'#213d34',18,COLORS.gold);
+  this.text(h.title,38,y+29,20,COLORS.gold,'left','600');
+  h.lines.forEach((v,i)=>this.text(v,38,y+61+i*25,13,COLORS.ink));
+  if(source){this.text('点亮起的位置继续',352,y+108,11,COLORS.muted,'right');}
+  else this.button(h.action,h.label||'明白了',38,y+106,314,42,true);
+ }
  box(x,y,w,h,fill=COLORS.panel,r=14,stroke=null){const c=this.c;c.beginPath();c.moveTo(x+r,y);c.lineTo(x+w-r,y);c.quadraticCurveTo(x+w,y,x+w,y+r);c.lineTo(x+w,y+h-r);c.quadraticCurveTo(x+w,y+h,x+w-r,y+h);c.lineTo(x+r,y+h);c.quadraticCurveTo(x,y+h,x,y+h-r);c.lineTo(x,y+r);c.quadraticCurveTo(x,y,x+r,y);c.closePath();c.fillStyle=fill;c.fill();if(stroke){c.strokeStyle=stroke;c.lineWidth=1;c.stroke();}}
  text(s,x,y,size=15,color=COLORS.ink,align='left',weight='normal'){const c=this.c;c.font=`${weight} ${size}px "PingFang SC", "Microsoft YaHei", sans-serif`;c.fillStyle=color;c.textAlign=align;c.textBaseline='middle';c.fillText(String(s),x,y);}
  hit(id,x,y,w,h){this.a.hits.push({id,x,y,w,h});}
@@ -2622,24 +2829,25 @@ class View{
  portrait(id,x,y,r=32,enemy=false){const c=this.c,h=G.H.heroFor(id);this.circle(x,y,r+3,'#354e47');this.circle(x,y,r,'#223a35');c.save();c.translate(x,y+12);const pal={main:enemy?'#b77d66':id==='liubei'?'#659f81':id==='huangzhong'?'#c3a05e':'#6d98b6',dark:'#223735',flag:h?.color||'#aaa',trim:'#e0c789'};c.scale(r/18,r/18);this.r.drawCommander({side:enemy?'red':'blue'},this.a.now,pal,enemy?-1:1);c.restore();}
  weapon(type,x,y,s=1,color=COLORS.gold){const c=this.c;c.save();c.translate(x,y);c.scale(s,s);c.lineWidth=2;c.strokeStyle=color;c.fillStyle=color;c.beginPath();if(type==='bladeShield'){c.moveTo(-9,-11);c.lineTo(9,-11);c.lineTo(8,5);c.lineTo(0,12);c.lineTo(-8,5);c.closePath();c.stroke();this.line(0,-7,0,6,color,2);}else if(type==='spear'){this.line(-8,11,8,-11,color,2);c.moveTo(4,-11);c.lineTo(12,-15);c.lineTo(8,-7);c.closePath();c.fill();}else if(type==='archer'){c.arc(-4,0,13,-1.15,1.15);c.stroke();this.line(1,-12,1,12,color,1);this.line(-8,0,15,0,color,1.5);this.line(11,-4,15,0,color,1.5);}else{c.moveTo(-10,10);c.lineTo(-6,-1);c.lineTo(3,-12);c.lineTo(8,-8);c.lineTo(13,-3);c.lineTo(9,2);c.lineTo(3,0);c.lineTo(4,10);c.closePath();c.stroke();}c.restore();}
  campArt(){const c=this.c;this.box(20,112,350,285,'#253e35',20);c.save();c.beginPath();c.rect(21,113,348,283);c.clip();const grad=c.createLinearGradient(0,113,0,397);grad.addColorStop(0,'#374e46');grad.addColorStop(1,'#192e2b');c.fillStyle=grad;c.fillRect(20,113,350,284);this.circle(294,164,27,'#d3b97b');for(let layer=0;layer<3;layer++){c.fillStyle=['#314c43','#29453b','#203d32'][layer];c.beginPath();c.moveTo(20,260+layer*34);for(let i=0;i<9;i++)c.lineTo(20+i*46,194+layer*38+Math.sin(i*2+layer)*30);c.lineTo(370,397);c.lineTo(20,397);c.fill();}for(const [x,y,s] of [[94,273,1],[281,284,.8],[191,338,1.2]]){c.save();c.translate(x,y);c.scale(s,s);c.fillStyle='#0f2625';c.beginPath();c.ellipse(0,25,48,10,0,0,7);c.fill();c.fillStyle='#b0a078';c.beginPath();c.moveTo(-41,21);c.lineTo(0,-28);c.lineTo(41,21);c.closePath();c.fill();c.fillStyle='#637967';c.beginPath();c.moveTo(0,-28);c.lineTo(41,21);c.lineTo(12,16);c.closePath();c.fill();c.fillStyle='#273e34';c.fillRect(-9,1,18,21);this.line(0,-29,0,-58,'#d3b97e',2);c.fillStyle='#b87862';c.beginPath();c.moveTo(0,-58);c.lineTo(25,-54);c.lineTo(19,-40);c.lineTo(0,-44);c.fill();c.restore();}this.text('整军，待发。',43,151,17,COLORS.ink);this.text('三十兵，一将，破万阵。',43,176,11,'#c5cdb5');c.restore();}
- camp(){const p=this.a.p;this.title('夺帅','三军 · 战役');this.campArt();const completed=G.J.completedOf(p.journey).length;this.text(`已破 ${completed} / 20 战`,38,374,13,COLORS.gold);const ready=G.supply(p,this.a.clock());this.box(20,413,350,62);this.text('营地补给',38,436,16);this.text(ready?`待领取 ${ready} 军功`:'20 分钟 +1 · 最多积存 12',38,459,11,COLORS.muted);this.button('claim',ready?`领取 +${ready}`:'积存中',260,424,96,40,ready>0);const next=G.J.levelFor(p.journey.levelId);this.button('go',completed===20?'再战沙场':`出征 · ${next.number}  ${next.name}`,20,495,350,60,true);this.button('nav:missions','支线委托',20,573,170,64);this.button('nav:heroes','武将养成',200,573,170,64);this.text('主将升级 → 技能点    ·    兵营训练 → 士兵增强',195,667,11,COLORS.muted,'center');}
+ camp(){const p=this.a.p;this.title('夺帅','三军 · 战役');this.campArt();const completed=G.J.completedOf(p.journey).length;this.text(`已破 ${completed} / 20 战`,38,374,13,COLORS.gold);const ready=G.supply(p,this.a.clock());this.box(20,413,350,62);this.text('营地补给',38,436,16);this.text(ready?`待领取 ${ready} 军功`:'20 分钟 +1 · 最多积存 12',38,459,11,COLORS.muted);this.button('claim',ready?`领取 +${ready}`:'积存中',260,424,96,40,ready>0);const next=G.J.levelFor(p.journey.levelId);this.button('go',completed===20?'再战沙场':`出征 · ${next.number}  ${next.name}`,20,495,350,60,true);this.button('nav:missions','支线委托',20,573,170,64);this.button('nav:academy',p.guide.status==='done'?'新兵演武':'新手引导',200,573,170,64);this.text('兵书 · 玩法与模块说明 ›',195,667,13,COLORS.muted,'center');this.hit('nav:manual',60,645,270,43);}
  map(){const a=this.a,p=a.p;this.title('征途',`第 ${a.chapter+1} 章 · ${G.J.CHAPTERS[a.chapter].name}`);for(let i=0;i<4;i++)this.button(`chapter:${i}`,`第 ${i+1} 章`,20+i*90,102,80,42,i===a.chapter);const available=G.J.availableLevels(p.journey);G.J.JOURNEY_LEVELS.slice(a.chapter*5,a.chapter*5+5).forEach((l,i)=>{const y=168+i*94,done=p.journey.wins[l.id],open=available.has(l.id);this.box(20,y,350,80,open?'#1f3733':'#182b29',14,done?'#52634a':open?COLORS.line:null);this.badge(done?'✓':l.number,49,y+39,open?COLORS.gold:COLORS.muted);this.text(l.name,83,y+27,18,open?COLORS.ink:COLORS.muted,'left','600');this.text(open?l.theme:G.J.lockReason(l,p.journey),83,y+55,12,COLORS.muted);this.text(done?'已破':open?'出阵 ›':'未开放',350,y+40,12,done?COLORS.green:COLORS.gold,'right');this.hit(`level:${l.id}`,20,y,350,80);});this.button('nav:missions','卡关了？去做支线',20,648,350,40);}
  missions(){this.back('军中委托');[['raid','剿匪夺粮','歼灭敌兵 · 逐档领军功','刀'],['guard','守营待援','保护主将 · 坚持到援军','守'],['relay','三军接力','残兵接战 · 排好出场顺序','叁']].forEach(([id,name,sub,icon],i)=>{const open=G.M.missionOpen(this.a.p.journey,id),y=118+i*158;this.box(20,y,350,138);this.badge(icon,55,y+38);this.text(name,91,y+33,21);this.text(sub,91,y+61,12,COLORS.muted);const today=G.M.missionOpen(this.a.p.journey,id)?this.a.p.journey.missions?.[localDay()]?.[id]||0:0;this.text(open?`今日 ${today} / 3 军功`:id==='relay'?'第 3 战后解锁':'第 2 战后解锁',38,y+106,12,COLORS.muted);this.button(`mission:${id}`,open?'整军 ›':'未开放',253,y+88,99,36,open);});this.text('未斩将也能按完成度拿奖励',195,636,13,COLORS.muted,'center');}
- currentConfig(){return this.a.mode==='relay'?this.a.p.armies[this.a.army]:this.a.p.journey.config;}
+ currentConfig(){return this.a.mode==='academy'?this.a.practiceConfig:this.a.mode==='relay'?this.a.p.armies[this.a.army]:this.a.p.journey.config;}
  field(roster,x,y,w,h,enemy=false,clickable=false){const c=this.c;this.box(x,y,w,h,'#253f34',12,'#49634e');c.save();c.beginPath();c.rect(x+1,y+1,w-2,h-2);c.clip();for(let n=1;n<6;n++)this.line(x,y+n*h/6,x+w,y+n*h/6,'#354e3c');const soldiers=roster.filter(s=>s.type!=='commander').slice().sort((a,b)=>a.y-b.y||a.x-b.x);for(const s of roster){const px=x+24+(enemy?s.x-17:s.x)/13*(w-48),py=y+22+s.y/18*(h-44);if(s.type==='commander'){this.portrait(enemy?this.enemyHero():this.currentConfig().heroId,px,py,15,enemy);if(clickable)this.hit('edit:hero',px-21,py-21,42,42);continue;}this.circle(px,py,17,enemy?'#714d3b':'#355f4d');this.weapon(s.type,px,py,.65,enemy?'#e4af94':COLORS.gold);this.text(enemy?s.count:soldiers.indexOf(s)+1,px+16,py-14,10,COLORS.ink,'center','600');if(clickable)this.hit(`slot:${s.id}`,px-21,py-21,42,42);}c.restore();}
- enemyHero(){if(this.a.mode==='main')return G.J.levelFor(this.a.p.journey.levelId).heroId;return G.M.enemyArmies(this.a.mode)[this.a.enemyArmy].heroId;}
- enemyRoster(){if(this.a.mode==='main')return G.J.levelFor(this.a.p.journey.levelId).enemy;const config=G.C.sanitizeCampaignConfig(G.M.enemyArmies(this.a.mode)[this.a.enemyArmy]);return G.E.mirrorFormation(config.formation);}
- prepare(){const a=this.a,p=a.p,c=this.currentConfig(),l=G.J.levelFor(p.journey.levelId);this.back(a.mode==='main'?`${l.number} · ${l.name}`:G.M.MISSIONS.find(m=>m.id===a.mode).name,a.mode==='main'?'map':'missions');if(a.mode==='relay'){for(let i=0;i<3;i++)this.button(`army:${i}`,`${i+1}军 · ${NAMES[p.armies[i].heroId]}`,20+i*118,82,112,42,i===a.army);}else this.text('点编队换兵，点主将换人',195,102,12,COLORS.muted,'center');this.text('我军 · 30',32,148,12,COLORS.green);this.text(`敌 · ${NAMES[this.enemyHero()]} · ${this.enemyRoster().reduce((n,s)=>n+(s.type==='commander'?0:s.count||6),0)}兵${a.mode==='relay'?' ›':''}`,205,148,12,COLORS.red);this.field(c.formation,20,168,170,270,false,true);this.field(this.enemyRoster(),200,168,170,270,true);this.box(20,455,350,65);this.portrait(c.heroId,52,488,21);this.text(NAMES[c.heroId],86,479,18);this.text(G.H.heroFor(c.heroId).role,86,503,11,COLORS.muted);this.button('edit:hero','换将',283,468,73,40);const numbered=c.formation.filter(s=>s.type!=='commander').sort((a,b)=>a.y-b.y||a.x-b.x);numbered.forEach((s,i)=>{const x=20+i*71;this.box(x,536,65,72);this.weapon(s.type,x+32,562,.7);this.text(`${i+1} ${SHORT[s.type]}`,x+32,592,12,COLORS.ink,'center');this.hit(`slot:${s.id}`,x,536,65,72);});this.button('edit:formation',`${NAMES[c.preset]} ›`,20,624,a.mode==='relay'?168:350,42);if(a.mode==='relay')this.button('edit:order','出场顺序 ›',200,624,170,42);this.button('start','出战',20,700,350,60,true);if(a.mode==='relay')this.hit('edit:enemy',200,132,170,306);}
+ enemyHero(){if(this.a.mode==='academy')return O.LESSONS[this.a.lesson].heroId;if(this.a.mode==='main')return G.J.levelFor(this.a.p.journey.levelId).heroId;return G.M.enemyArmies(this.a.mode)[this.a.enemyArmy].heroId;}
+ enemyRoster(){if(this.a.mode==='academy')return O.LESSONS[this.a.lesson].enemy;if(this.a.mode==='main')return G.J.levelFor(this.a.p.journey.levelId).enemy;const config=G.C.sanitizeCampaignConfig(G.M.enemyArmies(this.a.mode)[this.a.enemyArmy]);return G.E.mirrorFormation(config.formation);}
+ prepare(){const a=this.a,p=a.p,c=this.currentConfig(),l=G.J.levelFor(p.journey.levelId);this.back(a.mode==='academy'?`演武 ${a.lesson+1} · ${O.LESSONS[a.lesson].name}`:a.mode==='main'?`${l.number} · ${l.name}`:G.M.MISSIONS.find(m=>m.id===a.mode).name,a.mode==='academy'?'academy':a.mode==='main'?'map':'missions');if(a.mode==='relay'){for(let i=0;i<3;i++)this.button(`army:${i}`,`${i+1}军 · ${NAMES[p.armies[i].heroId]}`,20+i*118,82,112,42,i===a.army);}else this.text(a.mode==='academy'?'演武借用 · 不改变主线阵容':'点编队换兵，点主将换人',195,102,12,COLORS.muted,'center');this.text('我军 · 30',32,148,12,COLORS.green);this.text(`敌 · ${NAMES[this.enemyHero()]} · ${this.enemyRoster().reduce((n,s)=>n+(s.type==='commander'?0:s.count||6),0)}兵${a.mode==='relay'?' ›':''}`,205,148,12,COLORS.red);this.field(c.formation,20,168,170,270,false,true);this.field(this.enemyRoster(),200,168,170,270,true);this.box(20,455,350,65);this.portrait(c.heroId,52,488,21);this.text(NAMES[c.heroId],86,479,18);this.text(G.H.heroFor(c.heroId).role,86,503,11,COLORS.muted);this.button('edit:hero','换将',283,468,73,40);const numbered=c.formation.filter(s=>s.type!=='commander').sort((a,b)=>a.y-b.y||a.x-b.x);numbered.forEach((s,i)=>{const x=20+i*71;this.box(x,536,65,72);this.weapon(s.type,x+32,562,.7);this.text(`${i+1} ${SHORT[s.type]}`,x+32,592,12,COLORS.ink,'center');this.hit(`slot:${s.id}`,x,536,65,72);});this.button('edit:formation',`${NAMES[c.preset]} ›`,20,624,a.mode==='relay'?168:350,42);if(a.mode==='relay')this.button('edit:order','出场顺序 ›',200,624,170,42);this.button('start','出战',20,700,350,60,true);if(a.mode==='relay')this.hit('edit:enemy',200,132,170,306);}
  heroes(){const a=this.a,p=a.p,u=G.J.unlocksFor(p.journey),h=G.H.heroFor(a.hero),tree=p.talents[a.hero];this.title('武将',`统帅等级 ${p.journey.training.heroLevel} · 所有已招募武将共享`);G.H.HEROES.forEach((hero,i)=>this.button(`hero:${hero.id}`,u.heroes.includes(hero.id)?hero.name:`${hero.name} · 锁`,20+i*118,100,112,42,hero.id===a.hero));this.portrait(h.id,65,202,35);this.text(h.name,117,180,24);this.text(h.role,117,208,13,COLORS.gold);this.text(h.skill+' · 满蓝自动释放',117,234,12,COLORS.muted);this.hit('edit:heroInfo',24,156,342,92);this.text(`可用技能点 ${G.points(p)-G.spent(tree)}`,24,276,13,COLORS.gold);this.button('respec','重配',290,256,76,36);for(const t of G.TALENTS){if(t.parent){const par=G.TALENTS.find(x=>x.id===t.parent);this.line(t.x,par.y+60,t.x,t.y-26,(tree[t.parent]||0)>=t.need?'#aa9e6c':COLORS.line,2);}this.circle(t.x,t.y,26,tree[t.id]?'#607557':'#263d37');this.circle(t.x,t.y,21,'#213b34');this.text(t.name[0],t.x,t.y,19,tree[t.id]?COLORS.gold:COLORS.muted,'center','600');this.text(`${t.name} ${tree[t.id]||0}/${t.max}`,t.x,t.y+41,13,COLORS.ink,'center');this.hit(`talent:${t.id}`,t.x-55,t.y-29,110,84);}this.button('train:hero',`统帅升级 · ${p.journey.training.heroLevel>=G.J.capsFor(p.journey).heroLevel?'本章已满':'5 军功'}`,20,637,350,48,true);}
  barracks(){const p=this.a.p,u=G.J.unlocksFor(p.journey);this.title('兵营','训练提升生命与伤害，编队人数不变');G.C.TROOP_TYPES.forEach((type,i)=>{const y=113+i*125,r=p.journey.training.troopRanks[type],cap=G.J.capsFor(p.journey).troopRank,open=u.troops.includes(type);this.box(20,y,350,110);this.weapon(type,53,y+40,1.2);this.text(NAMES[type],91,y+28,20);this.text(open?`训练 ${r} 级 · 生命 / 伤害 +${r*6}%`:'推进主线解锁',91,y+54,12,COLORS.muted);this.text(ROLES[type],37,y+86,12,COLORS.gold);const cost=G.J.troopCost(r+1)-G.J.troopCost(r);this.button(`train:${type}`,!open?'未开放':r>=cap?'本章已满':`升级 · ${cost}`,252,y+67,104,32,open&&r<cap,!open||r>=cap);});this.button('resetAsk','重新分配训练军功',20,636,350,45);}
- drawBattle(){const a=this.a,b=a.run.battle,c=this.c;const snap=G.E.getSnapshot(b);this.back(a.mode==='main'?G.J.levelFor(a.run.levelId).name:'军中委托','camp');this.a.hits=this.a.hits.filter(h=>h.id!=='nav:camp');this.hit('retreatAsk',20,22,42,42);this.text(`${Math.floor(b.time)} / 90 秒`,364,43,12,COLORS.muted,'right');for(const [side,x,col] of [['blue',24,COLORS.green],['red',213,COLORS.red]]){const v=snap[side];this.text(NAMES[b.heroes[side]],x,98,19,col);this.text(`${v.soldiers} 兵`,x+150,98,13,col,'right');this.box(x,117,150,8,'#233b36',4);this.box(x,117,Math.max(1,150*v.commanderHp/v.commanderMaxHp),8,col,4);this.box(x,131,150,4,'#233b36',2);this.box(x,131,Math.max(1,150*v.mana/v.manaMax),4,'#85abc7',2);}
+ drawBattle(){const a=this.a,b=a.run.battle,c=this.c;const snap=G.E.getSnapshot(b);this.back(a.mode==='academy'?O.LESSONS[a.lesson].name:a.mode==='main'?G.J.levelFor(a.run.levelId).name:'军中委托','camp');this.a.hits=this.a.hits.filter(h=>h.id!=='nav:camp');this.hit('retreatAsk',20,22,42,42);this.text(`${Math.floor(b.time)} / 90 秒`,364,43,12,COLORS.muted,'right');for(const [side,x,col] of [['blue',24,COLORS.green],['red',213,COLORS.red]]){const v=snap[side];this.text(NAMES[b.heroes[side]],x,98,19,col);this.text(`${v.soldiers} 兵`,x+150,98,13,col,'right');this.box(x,117,150,8,'#233b36',4);this.box(x,117,Math.max(1,150*v.commanderHp/v.commanderMaxHp),8,col,4);this.box(x,131,150,4,'#233b36',2);this.box(x,131,Math.max(1,150*v.mana/v.manaMax),4,'#85abc7',2);}
  this.box(12,160,366,433,'#637c57',18);c.save();c.beginPath();c.rect(14,162,362,429);c.clip();const grad=c.createLinearGradient(0,160,0,593);grad.addColorStop(0,'#536c51');grad.addColorStop(.5,'#92966c');grad.addColorStop(1,'#546e50');c.fillStyle=grad;c.fillRect(14,162,362,429);for(let i=0;i<70;i++){const x=17+(i*73%355),y=170+(i*131%410);this.line(x,y,x+5,y-2,'#b3b58b22');}this.r.scale=11.2;this.r.ox=27;this.r.oy=278;this.r.readDamage(b.units,b.time);for(const u of this.r.deaths)this.r.drawCorpse(u,b.time);for(const u of b.units.filter(u=>u.alive).sort((u,v)=>u.y-v.y))this.r.drawUnit(u,b.time,false);this.r.drawEffects(b.effects,b.time);this.r.drawHitEffects(b.time);c.restore();this.text('我军',32,184,12,'#d6ead3');this.text('敌军',354,184,12,'#f3d0b5','right');const latest=b.events.filter(e=>e.type==='skill').slice(-1)[0];if(latest&&b.time-latest.time<3)this.text(latest.text.replace(/ ·.*/,''),195,564,12,COLORS.ink,'center');
  if(a.run.mission){const m=a.run.mission;this.text(m.id==='relay'?`我军 ${Math.min(3,m.indices.blue+1)} / 3     对阵     敌军 ${Math.min(3,m.indices.red+1)} / 3`:m.id==='raid'?'歼敌 8 / 16 / 24 人逐档获奖':'坚守 20 / 35 / 50 秒逐档获奖',195,621,13,COLORS.muted,'center');}
  this.button('pause',a.paused?'继续':'暂停',20,696,169,54);this.button('speed',`${a.speed} 倍速`,201,696,169,54,true);
  if(a.run.mission?.status==='between'){this.box(40,315,310,140,'#142b27',18,COLORS.gold);const m=a.run.mission,last=m.rounds[m.rounds.length-1];this.text(last.outcome==='won'?'敌军溃败 · 我军继续迎战':'先军退场 · 后军接战',195,350,17,COLORS.gold,'center');this.text(`存活士兵  我 ${last.blueSoldiers} : 敌 ${last.redSoldiers}`,195,378,13,COLORS.muted,'center');this.button('nextRound','下一军',63,401,264,38,true);}
  else if(a.paused&&!a.sheet){this.box(118,347,154,48,'#112a25');this.text('已暂停',195,371,19,COLORS.gold,'center');}}
- result(){const a=this.a,r=a.result;this.title(r.won?'旗开得胜':'重整旗鼓',a.mode==='main'?G.J.levelFor(a.run.levelId).name:G.M.MISSIONS.find(m=>m.id===a.mode).name);this.circle(195,227,77,'#233f34');this.circle(195,227,65,'#304f3e');this.text(r.won?'胜':'战',195,223,72,COLORS.gold,'center','600');this.text(`军功 +${r.reward}`,195,342,29,COLORS.gold,'center','600');this.text(`${Math.round(r.time)} 秒${r.rounds>1?` · ${r.rounds} 次交战`:''}`,195,387,14,COLORS.muted,'center');if(r.unlocked.length){this.box(20,424,350,74);this.text('新解锁',195,447,12,COLORS.muted,'center');this.text(r.unlocked.map(id=>NAMES[id]).join(' · '),195,476,19,COLORS.gold,'center');}else if(!r.won){this.text('换个阵容，或回营练兵再来。',195,459,15,COLORS.ink,'center');}else if(r.cleared===20)this.text('二十战功成，三军仍待出征。',195,459,16,COLORS.gold,'center');if(a.run.mission)this.button('edit:report','交战记录 ›',110,502,170,30);this.button(r.won&&a.mode==='main'?'next':'retry',r.won&&a.mode==='main'?r.cleared===20?'重返征途':'下一战':'调整阵容',20,545,350,56,true);this.button('nav:barracks','练兵',20,619,169,48);this.button('nav:missions','支线',201,619,169,48);this.button('nav:camp','返回营地',20,700,350,48);}
- sheet(){const a=this.a,s=a.sheet,p=a.p,c=this.c;c.fillStyle='#071313c9';c.fillRect(0,0,390,780);a.hits=[];this.box(14,179,362,587,'#1c3330',22,COLORS.line);this.button('close','×',316,196,42,38);const config=this.currentConfig(),u=G.J.unlocksFor(p.journey);if(s.type==='troop'){const list=config.formation.filter(s=>s.type!=='commander').sort((a,b)=>a.y-b.y||a.x-b.x);this.text(`第 ${list.findIndex(x=>x.id===s.slot)+1} 队 · 更换兵种`,32,220,20);G.C.TROOP_TYPES.forEach((t,i)=>{const y=270+i*105;this.box(30,y,330,90,config.formation.find(x=>x.id===s.slot)?.type===t?'#355243':'#243f37');this.weapon(t,65,y+41,1.2);this.text(NAMES[t],104,y+28,19);this.text(u.troops.includes(t)?ROLES[t]:'推进主线解锁',104,y+58,12,COLORS.muted);this.text(u.troops.includes(t)?'选择 ›':'锁',338,y+44,13,COLORS.gold,'right');this.hit(`troop:${t}`,30,y,330,90);});}
+ result(){const a=this.a,r=a.result;if(a.mode==='academy'){this.academyResult();return;}this.title(r.won?'旗开得胜':'重整旗鼓',a.mode==='main'?G.J.levelFor(a.run.levelId).name:G.M.MISSIONS.find(m=>m.id===a.mode).name);this.circle(195,227,77,'#233f34');this.circle(195,227,65,'#304f3e');this.text(r.won?'胜':'战',195,223,72,COLORS.gold,'center','600');this.text(`军功 +${r.reward}`,195,342,29,COLORS.gold,'center','600');this.text(`${Math.round(r.time)} 秒${r.rounds>1?` · ${r.rounds} 次交战`:''}`,195,387,14,COLORS.muted,'center');if(r.unlocked.length){this.box(20,424,350,74);this.text('新解锁',195,447,12,COLORS.muted,'center');this.text(r.unlocked.map(id=>NAMES[id]).join(' · '),195,476,19,COLORS.gold,'center');}else if(!r.won){this.text('换个阵容，或回营练兵再来。',195,459,15,COLORS.ink,'center');}else if(r.cleared===20)this.text('二十战功成，三军仍待出征。',195,459,16,COLORS.gold,'center');if(a.run.mission)this.button('edit:report','交战记录 ›',110,502,170,30);this.button(r.won&&a.mode==='main'?'next':'retry',r.won&&a.mode==='main'?r.cleared===20?'重返征途':'下一战':'调整阵容',20,545,350,56,true);this.button('nav:barracks','练兵',20,619,169,48);this.button('nav:missions','支线',201,619,169,48);this.button('nav:camp','返回营地',20,700,350,48);}
+ sheet(){const a=this.a,s=a.sheet,p=a.p,c=this.c;c.fillStyle='#071313c9';c.fillRect(0,0,390,780);a.hits=[];this.box(14,179,362,587,'#1c3330',22,COLORS.line);this.button('close','×',316,196,42,38);const config=this.currentConfig(),u=a.mode==='academy'?O.tools(a):G.J.unlocksFor(p.journey);if(s.type==='troop'){const list=config.formation.filter(s=>s.type!=='commander').sort((a,b)=>a.y-b.y||a.x-b.x);this.text(`第 ${list.findIndex(x=>x.id===s.slot)+1} 队 · 更换兵种`,32,220,20);G.C.TROOP_TYPES.forEach((t,i)=>{const y=270+i*105;this.box(30,y,330,90,config.formation.find(x=>x.id===s.slot)?.type===t?'#355243':'#243f37');this.weapon(t,65,y+41,1.2);this.text(NAMES[t],104,y+28,19);this.text(u.troops.includes(t)?ROLES[t]:'推进主线解锁',104,y+58,12,COLORS.muted);this.text(u.troops.includes(t)?'选择 ›':'锁',338,y+44,13,COLORS.gold,'right');this.hit(`troop:${t}`,30,y,330,90);});}
+ if(s.type==='help'){const h=O.HELP[s.id];this.text(h.name,32,220,22);this.circle(195,328,43,'#304f3e');this.text(h.icon,195,328,38,COLORS.gold,'center');h.lines.forEach((t,i)=>this.text(t,195,420+i*32,15,COLORS.ink,'center'));h.extra.forEach((t,i)=>this.text(t,195,531+i*30,12,COLORS.muted,'center'));this.button('close','记住了',32,682,326,48,true);}
  if(s.type==='heroInfo'){const h=G.H.heroFor(a.hero),lv=p.journey.training.heroLevel,tree=p.talents[a.hero];this.text(h.name,32,220,23);this.portrait(h.id,195,316,43);this.text(h.role,195,390,19,COLORS.gold,'center');const stats=[`生命 ${Math.round(h.stats.hp*G.J.heroMultiplier(lv)*(1+.08*(tree.vigor||0)))}`,`普攻 ${Math.round(h.stats.damage*G.J.heroMultiplier(lv)*(1+.08*(tree.valor||0)))}`,`蓝量 ${h.stats.manaMax}`];stats.forEach((t,i)=>this.text(t,80+i*116,436,14,COLORS.ink,'center'));const passive=a.hero==='liubei'?'刀盾、长枪生命 +15%':a.hero==='huangzhong'?'弓兵伤害 +20%':'骑兵移速 +25% · 伤害 +15%';this.text(passive,195,489,16,COLORS.gold,'center');this.text(h.skill+' · 满蓝自动释放',195,542,17,COLORS.ink,'center');const lines=a.hero==='liubei'?['附近 10 名士兵回血 30、加盾 40','范围 3.5 格 · 护盾持续 4 秒']:a.hero==='huangzhong'?['附近 12 名弓兵攻速 +30%','范围 5 格 · 持续 5 秒']:['附近 12 名骑兵加盾 35、移速 +20%','范围 6 格 · 持续 4 秒'];lines.forEach((t,i)=>this.text(t,195,583+i*32,13,COLORS.muted,'center'));this.button('close','知道了',32,682,326,48,true);}
  if(s.type==='report'){this.text('交战记录',32,220,22);const m=a.run.mission;m.rounds.forEach((r,i)=>{const y=268+i*88;this.box(30,y,330,76);this.text(`${r.blue+1}军 ${NAMES[m.armies[r.blue].heroId]}  对  ${r.red+1}军 ${NAMES[m.enemies[r.red].heroId]}`,44,y+20,14);this.text(r.outcome==='won'?'胜':r.outcome==='lost'?'负':'平',337,y+20,15,r.outcome==='won'?COLORS.gold:COLORS.red,'right');this.text(`剩余士兵  我 ${r.blueSoldiers} : 敌 ${r.redSoldiers}`,44,y+52,12,COLORS.muted);this.text(`${Math.round(r.time)} 秒`,337,y+52,12,COLORS.muted,'right');});}
  if(s.type==='hero'){this.text('选择主将',32,220,20);G.H.HEROES.forEach((h,i)=>{const y=280+i*126;this.box(30,y,330,108);this.portrait(h.id,73,y+56,28);this.text(h.name,120,y+32,22);this.text(h.role,120,y+61,13,COLORS.gold);this.text(u.heroes.includes(h.id)?h.skill:'推进主线解锁',120,y+85,12,COLORS.muted);this.hit(`pickhero:${h.id}`,30,y,330,108);});}
@@ -2650,89 +2858,163 @@ class View{
  if(s.type==='reset'){this.text('重新训练',32,220,20);this.text('返还全部训练军功',195,350,21,COLORS.gold,'center');this.text('统帅与兵营回到初始等级',195,402,15,COLORS.muted,'center');this.text('超出等级额度的技能点会一起返还',195,437,12,COLORS.muted,'center');this.button('resetTraining','确认重配',32,641,326,54,true);}
  if(s.type==='retreat'){this.text('撤回整军',32,220,20);this.text('本场不结算奖励',195,370,20,COLORS.ink,'center');this.button('resume','继续战斗',32,556,326,52,true);this.button('retreat','撤回布阵',32,625,326,52);}
  }
- draw(){const a=this.a,c=this.c;a.hits=[];c.fillStyle=COLORS.bg;c.fillRect(0,0,390,780);for(let i=0;i<16;i++)this.line(0,i*55,390,i*55-100,'#bfd1a504');({camp:()=>this.camp(),map:()=>this.map(),missions:()=>this.missions(),prepare:()=>this.prepare(),heroes:()=>this.heroes(),barracks:()=>this.barracks(),battle:()=>this.drawBattle(),result:()=>this.result()}[a.screen]||(()=>this.camp()))();if(['camp','map','heroes','barracks'].includes(a.screen))this.tabs();if(a.sheet)this.sheet();if(a.toast&&a.toast.until>a.now){this.box(18,16,354,42,'#e2c181');this.text(a.toast.text,195,37,12,'#17322b','center');}if(a.saveError)this.text('存档不可用',195,775,10,COLORS.red,'center');}
+ draw(){const a=this.a,c=this.c;a.hits=[];c.fillStyle=COLORS.bg;c.fillRect(0,0,390,780);for(let i=0;i<16;i++)this.line(0,i*55,390,i*55-100,'#bfd1a504');({welcome:()=>this.welcome(),academy:()=>this.academy(),manual:()=>this.manual(),camp:()=>this.camp(),map:()=>this.map(),missions:()=>this.missions(),prepare:()=>this.prepare(),heroes:()=>this.heroes(),barracks:()=>this.barracks(),battle:()=>this.drawBattle(),result:()=>this.result()}[a.screen]||(()=>this.camp()))();if(['camp','map','heroes','barracks'].includes(a.screen))this.tabs();if(a.sheet)this.sheet();this.coach();if(a.toast&&a.toast.until>a.now&&!O.coach(a)){this.box(18,16,354,42,'#e2c181');this.text(a.toast.text,195,37,12,'#17322b','center');}if(a.saveError)this.text('存档不可用',195,775,10,COLORS.red,'center');}
 }
 function localDay(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
 module.exports={View};
 
 },
 "src/app.js":function(require,module,exports){
-const G=require('./core.js');
-const {View}=require('./view.js');
-function createGame({canvas,load=()=>null,save=()=>{},legacy=null,onSound=()=>{},now=()=>Date.now()}){
- let saved;try{saved=load(G.KEY);}catch(_){}
- const p=G.clean(saved,legacy,now());
- const a={p,screen:'camp',sheet:null,tab:0,chapter:G.J.chapterReached(p.journey)-1,hero:p.journey.config.heroId,mode:'main',army:0,enemyArmy:0,run:null,result:null,speed:1,paused:false,toast:null,now:0,hits:[],saveError:false,clock:now};
- const view=new View(canvas.getContext('2d'),a);
- function persist(){try{save(G.KEY,p);a.saveError=false;}catch(_){a.saveError=true;toast('存档不可用，请勿关闭此页');}}
- function toast(text){a.toast={text,until:a.now+3};}
- const config=()=>a.mode==='relay'?p.armies[a.army]:p.journey.config;
- function saveConfig(c){if(a.mode==='relay')p.armies[a.army]=c;else p.journey.config=c;persist();}
- function enter(screen){a.screen=screen;a.sheet=null;a.toast=null;a.tab=0;if(screen==='map')a.chapter=G.J.levelFor(p.journey.levelId).chapter-1;}
- function prepare(mode='main',id=p.journey.levelId){
-  a.mode=mode;a.army=0;a.enemyArmy=0;if(mode==='main')p.journey.levelId=id;
-  p.armies=G.M.cleanArmies(p.armies,p.journey);a.run=null;enter('prepare');persist();
- }
- function dispatch(id){
-  if(p.sound)onSound(id);
-  const [kind,val]=id.split(':');
-  if(kind==='nav'){enter(val);if(val==='heroes')a.hero=p.journey.config.heroId;return;}
-  if(kind==='close'){a.sheet=null;return;}
-  if(kind==='claim'){const n=G.claim(p,now());toast(n?`军功 +${n}`:'每 20 分钟产出 1 军功');persist();return;}
-  if(kind==='chapter'){a.chapter=Math.max(0,Math.min(3,Number(val)));return;}
-  if(kind==='level'){if(!G.J.availableLevels(p.journey).has(val)){toast(G.J.lockReason(G.J.levelFor(val),p.journey));return;}prepare('main',val);return;}
-  if(kind==='mission'){if(!G.M.missionOpen(p.journey,val)){toast(val==='relay'?'通关第 3 战解锁':'通关第 2 战解锁');return;}prepare(val);return;}
-  if(kind==='go'){enter('map');return;}
-  if(kind==='edit'){a.sheet={type:val};return;}
-  if(kind==='army'){a.army=Number(val);return;}
-  if(kind==='enemy'){a.enemyArmy=Number(val);return;}
-  if(kind==='swap'){const i=Number(val);[p.armies[i],p.armies[i+1]]=[p.armies[i+1],p.armies[i]];persist();return;}
-  if(kind==='slot'){a.sheet={type:'troop',slot:val};return;}
-  if(kind==='troop'){
-   const c=G.clone(config()),i=G.C.PLAYER_SLOTS.findIndex(s=>s.id===a.sheet.slot);if(i<0)return;
-   if(!G.J.unlocksFor(p.journey).troops.includes(val)){toast('推进主线解锁');return;}
-   c.troops[i]=val;saveConfig(G.J.cleanConfig(c,p.journey));a.sheet=null;return;
+const G = require('./core.js');
+const O = require('./onboarding.js');
+const {View} = require('./view.js');
+function createGame({canvas, load = () => null, save = () => {}, legacy = null, onSound = () => {}, now = () => Date.now()}) {
+  let saved;
+  try {saved = load(G.KEY);} catch (_) {}
+  const p = G.clean(saved, legacy, now());
+  const a = {p, screen: p.guide.status === 'new' ? 'welcome' : 'camp', sheet: null, tab: 0,
+    chapter: G.J.chapterReached(p.journey) - 1, hero: p.journey.config.heroId,
+    mode: 'main', army: 0, enemyArmy: 0, lesson: 0, practiceConfig: null,
+    run: null, result: null, speed: 1, paused: false, toast: null, now: 0, hits: [], saveError: false, clock: now};
+  const view = new View(canvas.getContext('2d'), a);
+  function persist() {try {save(G.KEY, p); a.saveError = false;} catch (_) {a.saveError = true; toast('存档不可用，请勿关闭此页');}}
+  function toast(text) {a.toast = {text, until: a.now + 3};}
+  const config = () => a.mode === 'academy' ? a.practiceConfig : a.mode === 'relay' ? p.armies[a.army] : p.journey.config;
+  const available = () => a.mode === 'academy' ? O.tools(a) : G.J.unlocksFor(p.journey);
+  const cleanConfig = c => a.mode === 'academy' ? G.C.sanitizeCampaignConfig(c) : G.J.cleanConfig(c, p.journey);
+  function saveConfig(c) {
+    if (a.mode === 'academy') a.practiceConfig = c;
+    else if (a.mode === 'relay') p.armies[a.army] = c;
+    else p.journey.config = c;
+    persist();
   }
-  if(kind==='form'){
-   if(!G.J.unlocksFor(p.journey).formations.includes(val)){toast('推进主线解锁');return;}
-   saveConfig(G.J.cleanConfig({...config(),preset:val,formation:undefined},p.journey));a.sheet=null;return;
+  function enter(screen) {
+    a.screen = screen; a.sheet = null; a.toast = null; a.tab = 0;
+    if (screen === 'map') a.chapter = G.J.levelFor(p.journey.levelId).chapter - 1;
   }
-  if(kind==='pickhero'){
-   if(!G.J.unlocksFor(p.journey).heroes.includes(val)){toast('推进主线解锁');return;}
-   if(a.mode==='relay'){const other=p.armies.findIndex(c=>c.heroId===val);if(other!==a.army&&other>=0)p.armies[other].heroId=config().heroId;}
-   saveConfig({...config(),heroId:val});a.sheet=null;return;
+  function prepare(mode = 'main', id = p.journey.levelId) {
+    a.mode = mode; a.army = 0; a.enemyArmy = 0;
+    if (mode === 'main') p.journey.levelId = id;
+    p.armies = G.M.cleanArmies(p.armies, p.journey); a.run = null; enter('prepare'); persist();
   }
-  if(kind==='hero'){a.hero=val;return;}
-  if(kind==='talent'){a.sheet={type:'talent',id:val};return;}
-  if(kind==='learn'){const err=G.learn(p,a.hero,val);toast(err||'已学习');persist();a.sheet=null;return;}
-  if(kind==='respec'){p.talents[a.hero]={};persist();toast('技能点已全部返还');a.sheet=null;return;}
-  if(kind==='train'){toast(G.upgrade(p,val)||'升级成功');persist();return;}
-  if(kind==='resetTraining'){G.resetTraining(p);persist();toast('军功已返还 · 技能点同步校正');a.sheet=null;return;}
-  if(kind==='resetAsk'){a.sheet={type:'reset'};return;}
-  if(kind==='start'){if(a.screen!=='prepare')return;a.run=G.start(p,a.mode,p.journey.levelId);a.result=null;a.speed=1;a.paused=false;enter('battle');view.resetBattle();return;}
-  if(kind==='speed'){a.speed=a.speed===1?2:a.speed===2?4:1;return;}
-  if(kind==='pause'){a.paused=!a.paused;return;}
-  if(kind==='retreatAsk'){a.paused=true;a.sheet={type:'retreat'};return;}
-  if(kind==='retreat'){a.run=null;enter('prepare');return;}
-  if(kind==='resume'){a.sheet=null;a.paused=false;return;}
-  if(kind==='nextRound'){G.advance(a.run,p);view.resetBattle();a.paused=false;return;}
-  if(kind==='retry'){prepare(a.mode,a.run.levelId);return;}
-  if(kind==='next'){if(a.result?.cleared===20){enter('map');return;}prepare('main',p.journey.levelId);return;}
-  if(kind==='sound'){p.sound=!p.sound;persist();return;}
- }
- function tick(dt){
-  a.now+=dt;
-  if(a.screen==='battle'&&a.run&&!a.paused){
-   const r=a.run;
-   if(!r.mission||r.mission.status!=='between')G.step(r,Math.min(.12,dt)*a.speed);
-   const result=G.finish(p,r);if(result){a.result=result;persist();enter('result');}
+  function academy(index) {
+    const next = Math.max(0, Math.min(2, Number(index) || 0));
+    if (next > p.guide.passed.length) {toast('先完成上一场演武'); return;}
+    a.lesson = next; a.mode = 'academy';
+    a.practiceConfig = G.C.sanitizeCampaignConfig(O.LESSONS[a.lesson].config);
+    a.run = null; a.result = null;
+    if (p.guide.status !== 'done') p.guide.status = 'learning';
+    enter('prepare'); persist();
   }
- }
- function draw(){view.draw();}
- function touch(x,y){for(let i=a.hits.length-1;i>=0;i--){const h=a.hits[i];if(x>=h.x&&x<=h.x+h.w&&y>=h.y&&y<=h.y+h.h){dispatch(h.id);return h.id;}}return null;}
- function hide(){if(a.screen==='battle')a.paused=true;persist();}
- return {state:a,draw,tick,touch,hide,dispatch,view,persist};
+  function syncGuide() {
+    if (p.guide.status !== 'camp') return;
+    const g = p.guide;
+    if (p.journey.training.troopRanks.spear > 0) g.camp.troop = true;
+    if (p.journey.training.heroLevel >= 2) g.camp.hero = true;
+    if (G.spent(p.talents.liubei) > 0) g.camp.talent = true;
+  }
+  function dispatch(id) {
+    if (p.sound) onSound(id);
+    const [kind, val] = id.split(':');
+    if (kind === 'guide') {
+      const cue = O.coach(a);
+      if (val === 'ack' && cue) {p.guide.seen[cue.id] = true; persist();}
+      if (val === 'finish') {p.guide.status = 'done'; a.mode = 'main'; enter('map'); persist();}
+      if (val === 'defer') {p.guide.status = 'skipped'; a.mode = 'main'; enter('map'); persist();}
+      if (val === 'exit') {
+        if (a.mode === 'academy' || p.guide.status === 'camp') {
+          if (p.guide.status !== 'done') p.guide.status = 'skipped';
+          a.mode = 'main'; a.run = null; enter('camp'); persist();
+        } else if (cue) {p.guide.seen[cue.id] = true; persist();}
+      }
+      return;
+    }
+    if (kind === 'academy') {
+      if (val === 'skip') {p.guide.status = 'skipped'; a.mode = 'main'; enter('camp'); persist(); return;}
+      if (val === 'start') {
+        if (p.guide.passed.length === 3 && p.guide.status !== 'done') {p.guide.status = 'camp'; a.mode = 'main'; enter('camp'); syncGuide(); persist();}
+        else academy(p.guide.passed.length < 3 ? p.guide.passed.length : 0);
+        return;
+      }
+      if (val === 'next') {
+        if (a.lesson < 2) academy(a.lesson + 1);
+        else {a.mode = 'main'; enter('camp'); syncGuide(); persist();}
+        return;
+      }
+      if (/^[0-2]$/.test(val)) academy(Number(val));
+      return;
+    }
+    if (kind === 'help') {a.sheet = {type: 'help', id: O.HELP[val] ? val : 'prepare'}; return;}
+    if (kind === 'nav') {enter(val); if (val === 'heroes') a.hero = p.journey.config.heroId; if (['camp', 'map', 'academy', 'manual'].includes(val)) a.mode = 'main'; return;}
+    if (kind === 'close') {a.sheet = null; return;}
+    if (kind === 'claim') {const n = G.claim(p, now()); toast(n ? `军功 +${n}` : '每 20 分钟产出 1 军功'); persist(); return;}
+    if (kind === 'chapter') {a.chapter = Math.max(0, Math.min(3, Number(val))); return;}
+    if (kind === 'level') {if (!G.J.availableLevels(p.journey).has(val)) {toast(G.J.lockReason(G.J.levelFor(val), p.journey)); return;} prepare('main', val); return;}
+    if (kind === 'mission') {if (!G.M.missionOpen(p.journey, val)) {toast(val === 'relay' ? '通关第 3 战解锁' : '通关第 2 战解锁'); return;} prepare(val); return;}
+    if (kind === 'go') {a.mode = 'main'; enter('map'); return;}
+    if (kind === 'edit') {a.sheet = {type: val}; return;}
+    if (kind === 'army') {a.army = Number(val); return;}
+    if (kind === 'enemy') {a.enemyArmy = Number(val); return;}
+    if (kind === 'swap') {const i = Number(val); [p.armies[i], p.armies[i + 1]] = [p.armies[i + 1], p.armies[i]]; persist(); return;}
+    if (kind === 'slot') {a.sheet = {type: 'troop', slot: val}; return;}
+    if (kind === 'troop') {
+      const c = G.clone(config()), i = G.C.PLAYER_SLOTS.findIndex(s => s.id === a.sheet?.slot);
+      if (i < 0) return;
+      if (!available().troops.includes(val)) {toast('推进主线解锁'); return;}
+      c.troops[i] = val; saveConfig(cleanConfig(c)); a.sheet = null; return;
+    }
+    if (kind === 'form') {
+      if (!available().formations.includes(val)) {toast('推进主线解锁'); return;}
+      saveConfig(cleanConfig({...config(), preset: val, formation: undefined})); a.sheet = null; return;
+    }
+    if (kind === 'pickhero') {
+      if (!available().heroes.includes(val)) {toast('推进主线解锁'); return;}
+      if (a.mode === 'relay') {const other = p.armies.findIndex(c => c.heroId === val); if (other !== a.army && other >= 0) p.armies[other].heroId = config().heroId;}
+      saveConfig({...config(), heroId: val}); a.sheet = null; return;
+    }
+    if (kind === 'hero') {a.hero = val; return;}
+    if (kind === 'talent') {a.sheet = {type: 'talent', id: val}; return;}
+    if (kind === 'learn') {const err = G.learn(p, a.hero, val); toast(err || '已学习'); syncGuide(); persist(); a.sheet = null; return;}
+    if (kind === 'respec') {p.talents[a.hero] = {}; persist(); toast('技能点已全部返还'); a.sheet = null; return;}
+    if (kind === 'train') {toast(G.upgrade(p, val) || '升级成功'); syncGuide(); persist(); return;}
+    if (kind === 'resetTraining') {G.resetTraining(p); persist(); toast('军功已返还 · 技能点同步校正'); a.sheet = null; return;}
+    if (kind === 'resetAsk') {a.sheet = {type: 'reset'}; return;}
+    if (kind === 'start') {
+      if (a.screen !== 'prepare') return;
+      a.run = G.start(p, a.mode, a.mode === 'academy' ? a.lesson : p.journey.levelId, a.practiceConfig);
+      a.result = null; a.speed = a.mode === 'academy' ? 2 : 1; a.paused = false; enter('battle'); view.resetBattle(); return;
+    }
+    if (kind === 'speed') {a.speed = a.speed === 1 ? 2 : a.speed === 2 ? 4 : 1; return;}
+    if (kind === 'pause') {a.paused = !a.paused; return;}
+    if (kind === 'retreatAsk') {a.paused = true; a.sheet = {type: 'retreat'}; return;}
+    if (kind === 'retreat') {a.run = null; enter('prepare'); return;}
+    if (kind === 'resume') {a.sheet = null; a.paused = false; return;}
+    if (kind === 'nextRound') {G.advance(a.run, p); view.resetBattle(); a.paused = false; return;}
+    if (kind === 'retry') {if (a.mode === 'academy') {a.run = null; enter('prepare');} else prepare(a.mode, a.run.levelId); return;}
+    if (kind === 'next') {if (a.result?.cleared === 20) {enter('map'); return;} prepare('main', p.journey.levelId); return;}
+    if (kind === 'sound') {p.sound = !p.sound; persist();}
+  }
+  function tick(dt) {
+    a.now += dt;
+    if (a.screen === 'battle' && a.run && !a.paused && !O.coach(a)?.freeze) {
+      const r = a.run;
+      if (!r.mission || r.mission.status !== 'between') G.step(r, Math.min(.12, dt) * a.speed);
+      const result = G.finish(p, r);
+      if (result) {a.result = result; persist(); enter('result');}
+    }
+  }
+  function draw() {syncGuide(); view.draw();}
+  function touch(x, y) {
+    // Rebuild hits after each action so two fast taps cannot activate a button
+    // from the previous screen or bypass a new instruction.
+    view.draw();
+    for (let i = a.hits.length - 1; i >= 0; i--) {const h = a.hits[i]; if (x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h) {dispatch(h.id); return h.id;}}
+    return null;
+  }
+  function hide() {if (a.screen === 'battle') a.paused = true; persist();}
+  syncGuide();
+  return {state: a, draw, tick, touch, hide, dispatch, view, persist};
 }
-module.exports={createGame};
+module.exports = {createGame};
 
 }},cache={};function load(id){if(cache[id])return cache[id].exports;const m={exports:{}};cache[id]=m;modules[id](relative=>{const parts=id.split('/');parts.pop();for(const p of relative.split('/')){if(p==='..')parts.pop();else if(p!=='.')parts.push(p);}return load(parts.join('/'));},m,m.exports);return m.exports;}globalThis.CommanderGame=load('src/app.js');})();
