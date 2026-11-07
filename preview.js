@@ -2327,7 +2327,7 @@ class BattleRenderer {
 
   drawUnit(unit, time, setup) {
     const c=this.ctx,p=this.point(unit.x,unit.y),pal=friendly(unit)?P.ally:P.enemy;
-    const size=clamp(this.scale*.48,5.3,15),dir=Math.cos(unit.facing??(friendly(unit)?0:Math.PI))>=0?1:-1;
+    const size=this.unitSize(unit),dir=Math.cos(unit.facing??(friendly(unit)?0:Math.PI))>=0?1:-1;
     const seed=String(unit.id).split('').reduce((a,b)=>a+b.charCodeAt(0),0);
     const braced=unit.hitStopUntil>time;
     const walk=!setup&&!braced&&unit.type!=='commander'&&unit.cooldown<0?Math.sin(time*14+seed)*.65:0;
@@ -2359,11 +2359,17 @@ class BattleRenderer {
     c.restore();
     const isCommander=unit.type==='commander', damaged=unit.hp<unit.maxHp*.99;
     if(damaged||isCommander) {
-      const w=isCommander?Math.max(22,size*2.8):size*1.2,h=isCommander?3:2,y=p.y-size*(isCommander?(unit.combatStats?.speed>0?2.65:2.2):1.25);
+      const w=isCommander?Math.max(22,size*2.8):size*1.2,h=isCommander?(this.unitScale>1?4:3):2,y=p.y-size*(isCommander?(unit.combatStats?.speed>0?2.65:2.2):1.25);
       c.fillStyle='#172e25bb';c.fillRect(p.x-w/2-1,y-1,w+2,h+2);c.fillStyle=friendly(unit)?'#a1d3b5':'#e4a580';c.fillRect(p.x-w/2,y,w*clamp(unit.hp/unit.maxHp,0,1),h);
       if(isCommander) {c.fillStyle='#869fcb';c.fillRect(p.x-w/2,y+h+2,w*clamp((unit.mana||0)/(unit.manaMax||100),0,1),1.5);}
     }
     if(isCommander && !setup && unit.hp/unit.maxHp<.35) {c.strokeStyle=`rgba(231,178,115,${.3+Math.sin(time*6)*.2})`;c.lineWidth=1.3;c.beginPath();c.ellipse(p.x,p.y+3,size*1.6,size*.85,0,0,Math.PI*2);c.stroke();}
+  }
+
+  // Presentation scale only: battle coordinates, reach and collision stay in
+  // the simulation. Legacy desktop renderers keep the original scale.
+  unitSize(unit) {
+    return clamp(this.scale*.48,5.3,15)*(this.unitScale||1)*(unit.type==='commander'?(this.commanderScale||1):1);
   }
 
   drawCommander(unit,time,pal,dir) {
@@ -2747,8 +2753,33 @@ const ROLES={bladeShield:'挡箭 · 前排',spear:'反骑 · 拦截',archer:'远
 const SHORT={bladeShield:'盾',spear:'枪',archer:'弓',cavalry:'骑'};
 class View{
  constructor(c,a){this.c=c;this.a=a;this.r=Object.create(BattleRenderer.prototype);Object.assign(this.r,{ctx:c,previous:new Map(),deaths:[],visualHits:[],lastTime:0,frame:0});}
- resetBattle(){this.r.reset();}
+ resetBattle(){this.r.reset();this.battleCamera=null;}
  guideSnapshot(){return O.coach(this.a);}
+ battleViewport(units,time){
+  const alive=units.filter(u=>u.alive);if(!alive.length)return;
+  const xs=alive.map(u=>u.x),ys=alive.map(u=>u.y);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  // Keep every living soldier and both commanders in view. As the battle
+  // closes, use the unused ground for a closer view without changing positions.
+  const target=Math.min(21,282/Math.max(4,maxX-minX),323/Math.max(4,maxY-minY));
+  const prev=this.battleCamera,dt=prev?Math.max(0,time-prev.time):0;
+  const scale=prev?Math.min(target,prev.scale+(target-prev.scale)*(1-Math.exp(-dt*1.8))):target;
+  const cx=(minX+maxX)/2,cy=(minY+maxY)/2;
+  this.battleCamera={scale,time};
+  Object.assign(this.r,{scale,ox:195-cx*scale,oy:394-cy*scale,unitScale:1.65,commanderScale:1.2});
+ }
+ commanderLabels(units){
+  const labels=[];
+  for(const u of units.filter(u=>u.alive&&u.type==='commander')){
+   const p=this.r.point(u.x,u.y),size=this.r.unitSize(u);
+   const x=Math.max(43,Math.min(347,p.x));let y=Math.max(207,p.y-size*3.25-17);
+   if(labels.some(l=>Math.abs(l.x-x)<62&&Math.abs(l.y-y)<23))y-=25;
+   labels.push({x,y});const color=u.side==='blue'?COLORS.green:COLORS.red;
+   this.line(x,y+11,p.x,p.y-size*2.7,color);
+   this.box(x-29,y-11,58,22,'#102724ed',6,color);
+   this.text(`${u.side==='blue'?'我':'敌'}·${NAMES[this.a.run.battle.heroes[u.side]]}`,x,y,11,color,'center','600');
+  }
+ }
  welcome(){
   this.title('夺帅','你，是这支军队的新统领。');this.campArt();
   this.text('接过军旗，从第一战开始',195,437,23,COLORS.ink,'center','600');
@@ -2840,11 +2871,11 @@ class View{
  heroes(){const a=this.a,p=a.p,u=G.J.unlocksFor(p.journey),h=G.H.heroFor(a.hero),tree=p.talents[a.hero];this.title('武将',`统帅等级 ${p.journey.training.heroLevel} · 所有已招募武将共享`);G.H.HEROES.forEach((hero,i)=>this.button(`hero:${hero.id}`,u.heroes.includes(hero.id)?hero.name:`${hero.name} · 锁`,20+i*118,100,112,42,hero.id===a.hero));this.portrait(h.id,65,202,35);this.text(h.name,117,180,24);this.text(h.role,117,208,13,COLORS.gold);this.text(h.skill+' · 满蓝自动释放',117,234,12,COLORS.muted);this.hit('edit:heroInfo',24,156,342,92);this.text(`可用技能点 ${G.points(p)-G.spent(tree)}`,24,276,13,COLORS.gold);this.button('respec','重配',290,256,76,36);for(const t of G.TALENTS){if(t.parent){const par=G.TALENTS.find(x=>x.id===t.parent);this.line(t.x,par.y+60,t.x,t.y-26,(tree[t.parent]||0)>=t.need?'#aa9e6c':COLORS.line,2);}this.circle(t.x,t.y,26,tree[t.id]?'#607557':'#263d37');this.circle(t.x,t.y,21,'#213b34');this.text(t.name[0],t.x,t.y,19,tree[t.id]?COLORS.gold:COLORS.muted,'center','600');this.text(`${t.name} ${tree[t.id]||0}/${t.max}`,t.x,t.y+41,13,COLORS.ink,'center');this.hit(`talent:${t.id}`,t.x-55,t.y-29,110,84);}this.button('train:hero',`统帅升级 · ${p.journey.training.heroLevel>=G.J.capsFor(p.journey).heroLevel?'本章已满':'5 军功'}`,20,637,350,48,true);}
  barracks(){const p=this.a.p,u=G.J.unlocksFor(p.journey);this.title('兵营','训练提升生命与伤害，编队人数不变');G.C.TROOP_TYPES.forEach((type,i)=>{const y=113+i*125,r=p.journey.training.troopRanks[type],cap=G.J.capsFor(p.journey).troopRank,open=u.troops.includes(type);this.box(20,y,350,110);this.weapon(type,53,y+40,1.2);this.text(NAMES[type],91,y+28,20);this.text(open?`训练 ${r} 级 · 生命 / 伤害 +${r*6}%`:'推进主线解锁',91,y+54,12,COLORS.muted);this.text(ROLES[type],37,y+86,12,COLORS.gold);const cost=G.J.troopCost(r+1)-G.J.troopCost(r);this.button(`train:${type}`,!open?'未开放':r>=cap?'本章已满':`升级 · ${cost}`,252,y+67,104,32,open&&r<cap,!open||r>=cap);});this.button('resetAsk','重新分配训练军功',20,636,350,45);}
  drawBattle(){const a=this.a,b=a.run.battle,c=this.c;const snap=G.E.getSnapshot(b);this.back(a.mode==='academy'?O.LESSONS[a.lesson].name:a.mode==='main'?G.J.levelFor(a.run.levelId).name:'军中委托','camp');this.a.hits=this.a.hits.filter(h=>h.id!=='nav:camp');this.hit('retreatAsk',20,22,42,42);this.text(`${Math.floor(b.time)} / 90 秒`,364,43,12,COLORS.muted,'right');for(const [side,x,col] of [['blue',24,COLORS.green],['red',213,COLORS.red]]){const v=snap[side];this.text(NAMES[b.heroes[side]],x,98,19,col);this.text(`${v.soldiers} 兵`,x+150,98,13,col,'right');this.box(x,117,150,8,'#233b36',4);this.box(x,117,Math.max(1,150*v.commanderHp/v.commanderMaxHp),8,col,4);this.box(x,131,150,4,'#233b36',2);this.box(x,131,Math.max(1,150*v.mana/v.manaMax),4,'#85abc7',2);}
- this.box(12,160,366,433,'#637c57',18);c.save();c.beginPath();c.rect(14,162,362,429);c.clip();const grad=c.createLinearGradient(0,160,0,593);grad.addColorStop(0,'#536c51');grad.addColorStop(.5,'#92966c');grad.addColorStop(1,'#546e50');c.fillStyle=grad;c.fillRect(14,162,362,429);for(let i=0;i<70;i++){const x=17+(i*73%355),y=170+(i*131%410);this.line(x,y,x+5,y-2,'#b3b58b22');}this.r.scale=11.2;this.r.ox=27;this.r.oy=278;this.r.readDamage(b.units,b.time);for(const u of this.r.deaths)this.r.drawCorpse(u,b.time);for(const u of b.units.filter(u=>u.alive).sort((u,v)=>u.y-v.y))this.r.drawUnit(u,b.time,false);this.r.drawEffects(b.effects,b.time);this.r.drawHitEffects(b.time);c.restore();this.text('我军',32,184,12,'#d6ead3');this.text('敌军',354,184,12,'#f3d0b5','right');const latest=b.events.filter(e=>e.type==='skill').slice(-1)[0];if(latest&&b.time-latest.time<3)this.text(latest.text.replace(/ ·.*/,''),195,564,12,COLORS.ink,'center');
+ this.box(12,160,366,433,'#637c57',18);c.save();c.beginPath();c.rect(14,162,362,429);c.clip();const grad=c.createLinearGradient(0,160,0,593);grad.addColorStop(0,'#536c51');grad.addColorStop(.5,'#92966c');grad.addColorStop(1,'#546e50');c.fillStyle=grad;c.fillRect(14,162,362,429);for(let i=0;i<70;i++){const x=17+(i*73%355),y=170+(i*131%410);this.line(x,y,x+5,y-2,'#b3b58b22');}this.battleViewport(b.units,b.time);this.r.readDamage(b.units,b.time);for(const u of this.r.deaths)this.r.drawCorpse(u,b.time);const living=b.units.filter(u=>u.alive).sort((u,v)=>u.y-v.y);for(const u of living.filter(u=>u.type!=='commander'))this.r.drawUnit(u,b.time,false);for(const u of living.filter(u=>u.type==='commander'))this.r.drawUnit(u,b.time,false);this.r.drawEffects(b.effects,b.time);this.r.drawHitEffects(b.time);this.commanderLabels(b.units);c.restore();this.text('我军',32,184,12,'#d6ead3');this.text('敌军',354,184,12,'#f3d0b5','right');const latest=b.events.filter(e=>e.type==='skill').slice(-1)[0];if(latest&&b.time-latest.time<3)this.text(latest.text.replace(/ ·.*/,''),195,564,12,COLORS.ink,'center');
  if(a.run.mission){const m=a.run.mission;this.text(m.id==='relay'?`我军 ${Math.min(3,m.indices.blue+1)} / 3     对阵     敌军 ${Math.min(3,m.indices.red+1)} / 3`:m.id==='raid'?'歼敌 8 / 16 / 24 人逐档获奖':'坚守 20 / 35 / 50 秒逐档获奖',195,621,13,COLORS.muted,'center');}
  this.button('pause',a.paused?'继续':'暂停',20,696,169,54);this.button('speed',`${a.speed} 倍速`,201,696,169,54,true);
  if(a.run.mission?.status==='between'){this.box(40,315,310,140,'#142b27',18,COLORS.gold);const m=a.run.mission,last=m.rounds[m.rounds.length-1];this.text(last.outcome==='won'?'敌军溃败 · 我军继续迎战':'先军退场 · 后军接战',195,350,17,COLORS.gold,'center');this.text(`存活士兵  我 ${last.blueSoldiers} : 敌 ${last.redSoldiers}`,195,378,13,COLORS.muted,'center');this.button('nextRound','下一军',63,401,264,38,true);}
- else if(a.paused&&!a.sheet){this.box(118,347,154,48,'#112a25');this.text('已暂停',195,371,19,COLORS.gold,'center');}}
+ else if(a.paused&&!a.sheet){this.box(143,170,104,30,'#112a25');this.text('已暂停',195,185,14,COLORS.gold,'center');}}
  result(){const a=this.a,r=a.result;if(a.mode==='academy'){this.academyResult();return;}this.title(r.won?'旗开得胜':'重整旗鼓',a.mode==='main'?G.J.levelFor(a.run.levelId).name:G.M.MISSIONS.find(m=>m.id===a.mode).name);this.circle(195,227,77,'#233f34');this.circle(195,227,65,'#304f3e');this.text(r.won?'胜':'战',195,223,72,COLORS.gold,'center','600');this.text(`军功 +${r.reward}`,195,342,29,COLORS.gold,'center','600');this.text(`${Math.round(r.time)} 秒${r.rounds>1?` · ${r.rounds} 次交战`:''}`,195,387,14,COLORS.muted,'center');if(r.unlocked.length){this.box(20,424,350,74);this.text('新解锁',195,447,12,COLORS.muted,'center');this.text(r.unlocked.map(id=>NAMES[id]).join(' · '),195,476,19,COLORS.gold,'center');}else if(!r.won){this.text('换个阵容，或回营练兵再来。',195,459,15,COLORS.ink,'center');}else if(r.cleared===20)this.text('二十战功成，三军仍待出征。',195,459,16,COLORS.gold,'center');if(a.run.mission)this.button('edit:report','交战记录 ›',110,502,170,30);this.button(r.won&&a.mode==='main'?'next':'retry',r.won&&a.mode==='main'?r.cleared===20?'重返征途':'下一战':'调整阵容',20,545,350,56,true);this.button('nav:barracks','练兵',20,619,169,48);this.button('nav:missions','支线',201,619,169,48);this.button('nav:camp','返回营地',20,700,350,48);}
  sheet(){const a=this.a,s=a.sheet,p=a.p,c=this.c;c.fillStyle='#071313c9';c.fillRect(0,0,390,780);a.hits=[];this.box(14,179,362,587,'#1c3330',22,COLORS.line);this.button('close','×',316,196,42,38);const config=this.currentConfig(),u=a.mode==='academy'?O.tools(a):G.J.unlocksFor(p.journey);if(s.type==='troop'){const list=config.formation.filter(s=>s.type!=='commander').sort((a,b)=>a.y-b.y||a.x-b.x);this.text(`第 ${list.findIndex(x=>x.id===s.slot)+1} 队 · 更换兵种`,32,220,20);G.C.TROOP_TYPES.forEach((t,i)=>{const y=270+i*105;this.box(30,y,330,90,config.formation.find(x=>x.id===s.slot)?.type===t?'#355243':'#243f37');this.weapon(t,65,y+41,1.2);this.text(NAMES[t],104,y+28,19);this.text(u.troops.includes(t)?ROLES[t]:'推进主线解锁',104,y+58,12,COLORS.muted);this.text(u.troops.includes(t)?'选择 ›':'锁',338,y+44,13,COLORS.gold,'right');this.hit(`troop:${t}`,30,y,330,90);});}
  if(s.type==='help'){const h=O.HELP[s.id];this.text(h.name,32,220,22);this.circle(195,328,43,'#304f3e');this.text(h.icon,195,328,38,COLORS.gold,'center');h.lines.forEach((t,i)=>this.text(t,195,420+i*32,15,COLORS.ink,'center'));h.extra.forEach((t,i)=>this.text(t,195,531+i*30,12,COLORS.muted,'center'));this.button('close','记住了',32,682,326,48,true);}
