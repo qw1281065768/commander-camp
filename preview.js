@@ -2926,12 +2926,16 @@ function renderArmy(v,b,isBattle) {
   const previous=isBattle?v.expeditionCamera:null,dt=previous?Math.max(0,b.time-previous.time):0;
   const scale=previous?Math.min(target,previous.scale+(target-previous.scale)*(1-Math.exp(-dt*1.8))):target;
   v.expeditionCamera={scale,time:b.time};
-  Object.assign(v.r,{scale,ox:195-(minX+maxX)/2*scale,oy:399-(minY+maxY)/2*scale,unitScale:1.85,commanderScale:1.18});
+  // Keep the commander readable without turning him into a wall over the
+  // troops. Soldiers are the tactical object the player needs to read first.
+  Object.assign(v.r,{scale,ox:195-(minX+maxX)/2*scale,oy:399-(minY+maxY)/2*scale,unitScale:1.55,commanderScale:.82});
   c.save();c.beginPath();c.rect(5,278,380,238);c.clip();
   if(isBattle){v.r.readDamage(b.units,b.time);for(const u of v.r.deaths)v.r.drawCorpse(u,b.time);}
   const sorted=alive.slice().sort((a,b)=>a.y-b.y);
-  for(const u of sorted.filter(u=>u.type!=='commander'))v.r.drawUnit(u,isBattle?b.time:v.a.now,false);
+  // Draw the mounted commander first; a nearby soldier remains visible in
+  // front when formations compress during an engagement.
   for(const u of sorted.filter(u=>u.type==='commander'))v.r.drawUnit(u,isBattle?b.time:v.a.now,false);
+  for(const u of sorted.filter(u=>u.type!=='commander'))v.r.drawUnit(u,isBattle?b.time:v.a.now,false);
   if(isBattle){v.r.drawEffects(b.effects,b.time);v.r.drawHitEffects(b.time);}
   c.restore();
 }
