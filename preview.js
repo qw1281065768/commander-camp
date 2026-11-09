@@ -2577,6 +2577,7 @@ function action(id, title, lines, target) {return {id, title, lines, target};}
 // Derive each instruction from real state, so closing/reopening a picker or
 // resuming an interrupted lesson cannot advance a task that was never performed.
 function coach(a) {
+  if(a.flow === 'expedition' && a.mode !== 'academy') return null;
   const p = a.p, g = p.guide, seen = g.seen;
   if (a.sheet?.type === 'help' || a.screen === 'welcome' || a.screen === 'academy' || a.screen === 'manual') return null;
   if (a.mode === 'academy') {
@@ -2642,6 +2643,118 @@ function coach(a) {
 module.exports = {LESSONS, HELP, clean, createRun, settle, tools, coach};
 
 },
+"src/expedition.js":function(require,module,exports){
+// The first chapter is a continuous expedition. All encounters use the shared
+// combat engine; choices change actual troops, formations or disclosed bonuses.
+const E = require('../engine/engine.js');
+const C = require('../engine/campaign.js');
+const J = require('../engine/journey.js');
+const clone = x => JSON.parse(JSON.stringify(x));
+const NAMES = {bladeShield:'刀盾', spear:'长枪', archer:'弓兵', cavalry:'骑兵'};
+const HERO_NAMES = {liubei:'刘备', huangzhong:'黄忠', zhaoyun:'赵云'};
+const SPECIALISTS = {liubei:'bladeShield', huangzhong:'archer', zhaoyun:'cavalry'};
+const PHASES = ['ready','recruit','hero','route','formation','defeat','complete'];
+const ENCOUNTERS = [
+  {name:'山道前哨', short:'前哨', story:'带上这十二名士兵，夺下青石关。', hint:'击败敌方主将即可获胜', troops:['spear','spear'], count:4, heroId:'liubei', preset:'balanced'},
+  {name:'林间伏兵', short:'林口', story:'援军已到。带上新兵，继续向关隘推进。', hint:'刀盾在前，掩护身后的新兵', troops:['bladeShield','spear','spear'], count:3, heroId:'liubei', preset:'balanced'},
+  {name:'敌骑拦路', short:'骑哨', story:'选定的主将，将带着自己的亲兵同行。', hint:'长枪克骑兵；集中兵力也能破阵', troops:['cavalry','cavalry','bladeShield'], count:5, heroId:'liubei', preset:'wings'},
+  {name:'关外营垒', short:'营垒', story:'前面就是青石关，先拔掉关外的营垒。', hint:'每次交战前会补齐本次出征的部队', troops:['bladeShield','archer','spear','archer'], count:5, heroId:'huangzhong', preset:'shieldWall'},
+  {name:'夺下青石关', short:'夺关', story:'最后一战。用你一路组建的军队，夺帅破关。', hint:'盾墙聚兵，鹤翼从两侧展开', troops:['bladeShield','spear','archer','archer','bladeShield'], count:5, heroId:'huangzhong', preset:'shieldWall'}
+];
+function fresh() {return {version:1, stage:0, phase:'ready', recruit:null, heroId:'liubei', heroPicked:false, route:null, preset:'balanced', cleared:[], losses:0, totalTime:0, lastTime:0, reward:0, adopted:false};}
+function clean(raw) {
+  if (!raw || raw.version !== 1) return fresh();
+  const e=fresh();
+  e.adopted=raw.adopted===true;
+  e.recruit=['archer','spear'].includes(raw.recruit)?raw.recruit:null;
+  e.heroId=HERO_NAMES[raw.heroId]?raw.heroId:'liubei'; e.heroPicked=raw.heroPicked===true;
+  e.route=['reinforce','forge'].includes(raw.route)?raw.route:null;
+  e.preset=['balanced','shieldWall','wings'].includes(raw.preset)?raw.preset:'balanced';
+  const count=Math.max(0,Math.min(5,Math.floor(Number(raw.cleared?.length)||0)));
+  e.cleared=Array.from({length:count},(_,i)=>i);
+  e.stage=Math.min(4,count); e.phase=count===5?'complete':PHASES.includes(raw.phase)&&raw.phase!=='complete'?raw.phase:'ready';
+  // Recover a closed tab at any reward boundary without skipping a choice.
+  if(count>0&&!e.recruit){e.stage=1;e.cleared=[0];e.phase='recruit';}
+  else if(count>1&&!e.heroPicked){e.stage=2;e.cleared=[0,1];e.phase='hero';}
+  else if(count>2&&!e.route){e.stage=3;e.cleared=[0,1,2];e.phase='route';}
+  else if(count===4&&e.preset==='balanced')e.phase='formation';
+  else if(count<4&&['recruit','hero','route','formation'].includes(e.phase))e.phase='ready';
+  for(const key of ['losses','totalTime','lastTime','reward'])e[key]=Math.max(0,Math.min(100000,Number(raw[key])||0));
+  return e;
+}
+function troopList(e) {
+  const list=['bladeShield','bladeShield'];
+  if(e.recruit)list.push(e.recruit);
+  if(e.heroPicked)list.push(SPECIALISTS[e.heroId]);
+  if(e.route==='reinforce')list.push(SPECIALISTS[e.heroId]);
+  return list;
+}
+function roster(troops,preset='balanced',count=6) {
+  const filled=[...troops];while(filled.length<5)filled.push('bladeShield');
+  return C.formationFor(preset,filled).filter(s=>s.type==='commander'||C.PLAYER_SLOTS.findIndex(p=>p.id===s.id)<troops.length).map(s=>({...s,count:s.type==='commander'?1:count}));
+}
+const enemy=e=>E.mirrorFormation(roster(ENCOUNTERS[e.stage].troops,ENCOUNTERS[e.stage].preset,ENCOUNTERS[e.stage].count),'exp-enemy');
+function options(e) {
+  if(e.phase==='recruit')return [
+    {id:'archer',name:'弓兵',tag:'后排输出',detail:'招募 6 名弓兵',type:'archer'},
+    {id:'spear',name:'长枪',tag:'拦截骑兵',detail:'招募 6 名长枪兵',type:'spear'}];
+  if(e.phase==='hero')return [
+    {id:'liubei',name:'刘备',tag:'护阵回血',detail:'刀盾与枪兵生命 +15%',type:'bladeShield'},
+    {id:'huangzhong',name:'黄忠',tag:'弓阵齐射',detail:'弓兵伤害 +20%',type:'archer'},
+    {id:'zhaoyun',name:'赵云',tag:'骑兵突击',detail:'骑兵伤害 +15% · 移速 +25%',type:'cavalry'}];
+  if(e.phase==='route')return [
+    {id:'reinforce',name:'义军营',tag:'增加兵力',detail:`再招 6 名${NAMES[SPECIALISTS[e.heroId]]}`,type:SPECIALISTS[e.heroId]},
+    {id:'forge',name:'军械营',tag:'强化现有部队',detail:'士兵生命 +25% · 伤害 +20%',type:'bladeShield'}];
+  if(e.phase==='formation'||e.phase==='defeat')return [
+    {id:'shieldWall',name:'盾墙阵',tag:'前排护住后排',detail:'收拢队伍，集中迎敌',type:'bladeShield'},
+    {id:'wings',name:'鹤翼阵',tag:'两翼展开',detail:'拉开两侧，分兵进攻',type:'cavalry'}];
+  return [];
+}
+function choose(e,id) {
+  if(!options(e).some(o=>o.id===id))return false;
+  if(e.phase==='recruit')e.recruit=id;
+  else if(e.phase==='hero'){e.heroId=id;e.heroPicked=true;}
+  else if(e.phase==='route')e.route=id;
+  else e.preset=id;
+  e.phase='ready'; return true;
+}
+function preview(e,id) {const copy=clone(e);if(id)choose(copy,id);return copy;}
+function createRun(e) {
+  const l=ENCOUNTERS[e.stage];
+  const battle=E.createLabBattle({blue:roster(troopList(e),e.preset),red:enemy(e),scenarioId:`expedition-${e.stage}`,aiMode:'roles',combatVersion:E.CAMPAIGN_COMBAT_VERSION,heroes:{blue:e.heroId,red:l.heroId}});
+  if(e.route==='forge')for(const u of battle.units.filter(u=>u.side==='blue'&&u.type!=='commander')){
+    u.baseHp*=1.25;u.hp*=1.25;u.maxHp*=1.25;u.damageMultiplier=(u.damageMultiplier||1)*1.2;
+  }
+  battle.status='running';
+  return {mode:'expedition',stage:e.stage,levelId:`expedition-${e.stage}`,battle,mission:null,settled:false};
+}
+function settle(p,run) {
+  const e=p.expedition,won=run.battle.status==='won';
+  e.lastTime=run.battle.time;
+  if(!won){e.losses++;e.phase='defeat';}
+  else if(run.stage===e.cleared.length){
+    e.cleared.push(run.stage);e.totalTime+=run.battle.time;
+    e.stage=Math.min(4,run.stage+1);e.phase=['recruit','hero','route','formation','complete'][run.stage];
+  }
+  let reward=0;
+  if(e.phase==='complete'&&won){
+    // This expedition replaces the introductory chapter for new players. Award
+    // only missing first clears; never farm replay rewards or overwrite veterans.
+    const hadChapter=Boolean(p.journey.wins[J.CHAPTERS[0].levels[4]]);
+    e.adopted=!hadChapter;
+    for(const id of J.CHAPTERS[0].levels)if(!p.journey.wins[id]){p.journey.wins[id]=1;reward+=J.firstReward(id);}
+    if(!hadChapter){
+      const troops=troopList(e);while(troops.length<5)troops.push(SPECIALISTS[e.heroId]);
+      p.journey.config=J.cleanConfig({heroId:e.heroId,troops,preset:e.preset},p.journey);
+      p.journey.levelId=J.nextLevel(p.journey,J.CHAPTERS[0].levels[4]);
+    }
+    e.reward=reward;p.guide.status='done';
+  }
+  return {won,reward,unlocked:[],time:run.battle.time,rounds:1,cleared:e.cleared.length};
+}
+module.exports={NAMES,HERO_NAMES,SPECIALISTS,ENCOUNTERS,fresh,clean,troopList,roster,enemy,options,choose,preview,createRun,settle};
+
+},
 "src/core.js":function(require,module,exports){
 const J=require('../engine/journey.js');
 const M=require('../engine/missions.js');
@@ -2649,6 +2762,7 @@ const C=require('../engine/campaign.js');
 const E=require('../engine/engine.js');
 const H=require('../engine/heroes.js');
 const O=require('./onboarding.js');
+const X=require('./expedition.js');
 const clone=x=>JSON.parse(JSON.stringify(x));
 const KEY='commander-camp-v3';
 const HERO_IDS=H.HEROES.map(h=>h.id);
@@ -2672,6 +2786,7 @@ function clean(input={},legacy=null,now=Date.now()){
  if(J.trainingCost(training)<=J.earnedMerit(journey)+reserve)journey.training=training;
  const p={schema:3,journey,reserve,lastClaim:Number.isFinite(raw.lastClaim)?int(raw.lastClaim,now-86400000,now):now,talents:{},armies:[],sound:raw.sound!==false,guide:O.clean(raw.guide,Boolean(raw.journey||legacy))};
  for(const hero of HERO_IDS){const tree={};for(const t of TALENTS){tree[t.id]=int(raw.talents?.[hero]?.[t.id],0,t.max);if(t.parent&&(tree[t.parent]||0)<t.need)tree[t.id]=0;}p.talents[hero]=spent(tree)<=points(p)?tree:{};}
+ p.expedition=X.clean(raw.expedition);
  p.armies=M.cleanArmies(raw.armies,p.journey);return p;
 }
 const money=p=>J.earnedMerit(p.journey)+p.reserve-J.trainingCost(p.journey.training);
@@ -2704,6 +2819,7 @@ function applyTalents(b,p){
  for(const u of b.units.filter(u=>u.side==='blue'&&types.includes(u.type))){u.damageMultiplier=(u.damageMultiplier||1)*(1+.04*(t.command||0));u.speedMultiplier=(u.speedMultiplier||1)*(1+.04*(t.march||0));}
 }
 function start(p,mode='main',levelId=p.journey.levelId,config){
+ if(mode==='expedition')return X.createRun(p.expedition);
  if(mode==='academy')return O.createRun(levelId,config);
  const training=clone(p.journey.training);let battle,mission=null;
  if(mode==='main'){
@@ -2730,6 +2846,7 @@ function finish(p,run){
  if(run.settled)return null;
  if(run.mission?run.mission.status!=='finished':['ready','running'].includes(run.battle.status))return null;
  run.settled=true;
+ if(run.mode==='expedition')return X.settle(p,run);
  if(run.mode==='academy')return O.settle(p,run);
  const training=clone(p.journey.training),before=J.unlocksFor(p.journey);
  const out=run.mission?M.settleMission(p.journey,run.mission):J.settleBattle(p.journey,run.battle);
@@ -2743,9 +2860,208 @@ function finish(p,run){
 module.exports={KEY,J,M,C,E,H,TALENTS,HERO_IDS,clone,clean,money,supply,claim,points,spent,learn,upgrade,resetTraining,applyTalents,start,advance,step,finish};
 
 },
+"src/expedition-view.js":function(require,module,exports){
+const X = require('./expedition.js');
+const G = require('./core.js');
+const P = {ink:'#f5ebd1',muted:'#b0bcaa',gold:'#efd095',jade:'#99cfb1',red:'#efad91',panel:'#182d28'};
+
+function poly(v,points,color) {
+  const c=v.c;c.fillStyle=color;c.beginPath();points.forEach(([x,y],i)=>i?c.lineTo(x,y):c.moveTo(x,y));c.closePath();c.fill();
+}
+function flag(v,x,y,color,label,scale=1) {
+  const c=v.c;c.save();c.translate(x,y);c.scale(scale,scale);
+  v.line(0,0,0,64,'#ccbc8f',2);
+  const sway=Math.sin(v.a.now*1.8+x)*2;
+  poly(v,[[1,1],[29,5+sway],[25,18],[29,30+sway],[1,28]],color);
+  v.text(label,13,15,12,'#fff0c9','center','600');c.restore();
+}
+function scenery(v,stage,won=false) {
+  const c=v.c;
+  const sky=c.createLinearGradient(0,162,0,533);sky.addColorStop(0,'#233e35');sky.addColorStop(.48,'#6e8060');sky.addColorStop(1,'#364c36');
+  c.fillStyle=sky;c.fillRect(0,162,390,371);
+  v.circle(286,204,30,'#e5cc8b44');v.circle(286,204,22,'#f4dca455');
+  poly(v,[[0,230],[49,184],[98,211],[154,174],[220,233],[278,183],[340,202],[390,171],[390,313],[0,313]],'#345444');
+  poly(v,[[0,255],[58,220],[122,263],[173,208],[235,264],[295,225],[350,247],[390,223],[390,330],[0,330]],'#49634d');
+  // A road and a distant gate remain visible throughout recruiting and fighting.
+  poly(v,[[239,263],[280,263],[343,533],[82,533]],'#a3a17b35');
+  if(stage>=3||won){
+    v.box(224,224,113,64,'#536450',2);v.box(262,251,34,38,'#243d31',10);
+    for(let i=0;i<8;i++)v.box(220+i*16,219,11,13,'#63745d',1);
+    for(let row=0;row<3;row++)for(let col=0;col<5;col++)v.line(230+col*21,240+row*13,242+col*21,240+row*13,'#a4a78333');
+    poly(v,[[246,223],[280,202],[313,223]],'#283f35');
+    flag(v,280,207,won?'#4a8c71':'#a25c4a',won?'我':'关',.64);
+  }
+  for(let i=0;i<38;i++){
+    const x=(i*97+13)%390,y=291+(i*43)%226;
+    v.line(x,y,x+3,y-4,'#bdc19325');v.line(x+3,y,x+7,y-2,'#bdc19325');
+  }
+  // Frame the play space without a separate dashboard-like battlefield card.
+  poly(v,[[0,435],[11,403],[27,432],[19,476],[36,533],[0,533]],'#233d30');
+  poly(v,[[390,398],[377,381],[365,419],[376,467],[350,533],[390,533]],'#233d30');
+  flag(v,23,280,'#487e68','军',.7);
+  if(!won)flag(v,359,278,'#a26350','敌',.7);
+  const fade=c.createLinearGradient(0,483,0,539);fade.addColorStop(0,'#10241c00');fade.addColorStop(1,P.panel);c.fillStyle=fade;c.fillRect(0,483,390,56);
+}
+function primary(v,id,label) {
+  v.box(18,705,354,59,P.gold,13,'#fff0bb');
+  v.text(label,195,734,18,'#25392d','center','600');
+  v.text('›',348,734,26,'#596044');v.hit(id,18,705,354,59);
+}
+function progress(v,e) {
+  const y=147;v.line(36,y,354,y,'#68826b66',2);
+  X.ENCOUNTERS.forEach((l,i)=>{
+    const x=39+i*78,done=e.cleared.includes(i),active=e.stage===i;
+    v.circle(x,y,done||active?10:6,done?P.gold:active?'#728e6b':'#3a5144');
+    if(done)v.text('✓',x,y,10,'#253c2d','center','600');
+    else if(active)v.circle(x,y,4,P.gold);
+    v.text(l.short,x,169,11,done||active?P.gold:'#82917d','center');
+  });
+}
+function renderArmy(v,b,isBattle) {
+  const c=v.c,alive=b.units.filter(u=>u.alive);
+  if(!alive.length)return;
+  const minX=Math.min(...alive.map(u=>u.x)),maxX=Math.max(...alive.map(u=>u.x));
+  const minY=Math.min(...alive.map(u=>u.y)),maxY=Math.max(...alive.map(u=>u.y));
+  const target=Math.min(19,298/Math.max(10,maxX-minX),198/Math.max(8,maxY-minY));
+  const previous=isBattle?v.expeditionCamera:null,dt=previous?Math.max(0,b.time-previous.time):0;
+  const scale=previous?Math.min(target,previous.scale+(target-previous.scale)*(1-Math.exp(-dt*1.8))):target;
+  v.expeditionCamera={scale,time:b.time};
+  Object.assign(v.r,{scale,ox:195-(minX+maxX)/2*scale,oy:399-(minY+maxY)/2*scale,unitScale:1.85,commanderScale:1.18});
+  c.save();c.beginPath();c.rect(5,278,380,238);c.clip();
+  if(isBattle){v.r.readDamage(b.units,b.time);for(const u of v.r.deaths)v.r.drawCorpse(u,b.time);}
+  const sorted=alive.slice().sort((a,b)=>a.y-b.y);
+  for(const u of sorted.filter(u=>u.type!=='commander'))v.r.drawUnit(u,isBattle?b.time:v.a.now,false);
+  for(const u of sorted.filter(u=>u.type==='commander'))v.r.drawUnit(u,isBattle?b.time:v.a.now,false);
+  if(isBattle){v.r.drawEffects(b.effects,b.time);v.r.drawHitEffects(b.time);}
+  c.restore();
+}
+function armyHeader(v,b,isBattle) {
+  for(const [side,x,color] of [['blue',18,P.jade],['red',218,P.red]]){
+    const u=b.units.find(u=>u.side===side&&u.type==='commander');
+    const count=b.units.filter(u=>u.side===side&&u.type!=='commander'&&u.alive).length;
+    v.box(x,188,154,75,'#142b24e8',10);
+    v.portrait(b.heroes[side],x+27,219,18,side==='red');
+    v.text(`${side==='blue'?'我':'敌'}·${X.HERO_NAMES[b.heroes[side]]}`,x+55,207,14,color,'left','600');
+    v.text(`${count} 兵`,x+55,230,13,P.ink);
+    if(isBattle){
+      v.box(x+55,244,84,4,'#3e5144',2);v.box(x+55,244,Math.max(1,84*Math.max(0,u.hp)/u.maxHp),4,color,2);
+      v.box(x+55,252,84*Math.min(1,u.mana/u.manaMax),3,'#90b8d5',1);
+    } else v.text('待命',x+137,231,11,P.muted,'right');
+  }
+  v.text('对',195,220,12,'#e3d8b9','center');
+}
+function draw(v) {
+  const a=v.a,e=a.p.expedition,l=X.ENCOUNTERS[e.stage],isBattle=a.screen==='battle';
+  const opts=X.options(e),choice=opts.find(o=>o.id===a.expeditionChoice)||opts[0];
+  const selected=X.preview(e,choice?.id),key=JSON.stringify(selected);
+  if(!isBattle&&v.expeditionPreviewKey!==key){v.expeditionPreviewKey=key;v.expeditionPreview=X.createRun(selected).battle;}
+  const b=isBattle?a.run.battle:v.expeditionPreview;
+  const c=v.c;c.fillStyle=P.panel;c.fillRect(0,0,390,780);
+  v.text('夺 帅',21,30,15,P.gold,'left','600');v.text('首征 · 青石关',195,30,12,P.muted,'center');
+  if(isBattle){v.text('撤回',349,30,12,P.muted,'center');v.hit('retreatAsk',321,8,57,44);}
+  else {v.text('营地',349,30,12,P.muted,'center');v.hit('trip:menu',321,8,57,44);}
+  const title=e.phase==='complete'?'青石关，拿下了！':isBattle?l.name:e.stage===0?'十二名士兵，一座关':l.name;
+  v.text(title,195,78,27,P.ink,'center','600');
+  const sub=isBattle?`自动交战 · ${Math.floor(b.time)} / 90 秒`:e.phase==='complete'?'你的第一支军队，就这样打出来了。':l.story;
+  v.text(sub,195,113,12,P.muted,'center');progress(v,e);
+  scenery(v,e.stage,e.phase==='complete');
+  // Progress sits above the scene; re-paint labels after the mountain background.
+  X.ENCOUNTERS.forEach((l,i)=>v.text(l.short,39+i*78,169,11,e.cleared.includes(i)||e.stage===i?P.gold:'#82917d','center'));
+  if(e.phase==='complete'&&!isBattle){
+    v.box(64,190,262,55,'#142b24e8',12);v.text('青石关易帜 · 全军入城',195,217,18,P.gold,'center','600');
+    renderArmy(v,{...b,units:b.units.filter(u=>u.side==='blue')},false);
+  }else{armyHeader(v,b,isBattle);renderArmy(v,b,isBattle);}
+  if(e.phase==='complete'&&!isBattle){complete(v,e);return;}
+  if(isBattle){
+    const h=G.H.heroFor(e.heroId),skill=b.events.filter(x=>x.type==='skill'&&x.side==='blue').slice(-1)[0];
+    v.text(a.paused?'暂歇片刻':'两军交锋',195,549,23,P.ink,'center','600');
+    v.text(skill&&b.time-skill.time<4?`${h.name} · ${h.skill}`:`${h.name} · 满蓝自动释放「${h.skill}」`,195,585,14,P.gold,'center');
+    const dead=b.units.filter(u=>!u.alive&&u.type!=='commander');
+    v.text(`我军折损 ${dead.filter(u=>u.side==='blue').length}     敌军折损 ${dead.filter(u=>u.side==='red').length}`,195,628,13,P.muted,'center');
+    v.text('击败敌将，即可夺取这一战',195,668,12,P.muted,'center');
+    v.button('pause',a.paused?'继续战斗':'暂停',18,708,228,56,a.paused);
+    v.button('speed',`${a.speed} 倍速`,258,708,114,56);
+    return;
+  }
+  if(opts.length){
+    const headings={recruit:'首战告捷 · 招募援军',hero:'有人愿意与你并肩作战',route:'岔路口 · 选一处整备',formation:'关隘在前 · 选一个阵型',defeat:'这一战，换个阵型再试'};
+    v.text(headings[e.phase],195,546,20,P.ink,'center','600');
+    let detail=choice.detail;
+    if(e.phase==='hero')detail+=` · 带来 6 名${X.NAMES[choice.type]}`;
+    if(e.phase==='route'&&choice.id==='forge')detail+='（本次出征）';
+    if(e.phase==='defeat')detail='部队已补齐 · 可立即再战，不扣资源';
+    v.text(detail,195,575,e.phase==='hero'||e.phase==='route'?11:13,P.muted,'center');
+    const gap=10,w=(354-gap*(opts.length-1))/opts.length;
+    opts.forEach((o,i)=>{
+      const x=18+i*(w+gap),on=choice.id===o.id;
+      v.box(x,594,w,96,on?'#365340':'#20382d',12,on?P.gold:'#465c48');
+      if(e.phase==='hero')v.portrait(o.id,x+w/2,617,16);
+      else if(e.phase==='formation'||e.phase==='defeat'){
+        const points=o.id==='shieldWall'?[[0,0],[0,8],[0,16],[-10,4],[-10,12]]:[[-10,0],[0,5],[-5,10],[0,15],[-10,20]];
+        for(const [dx,dy] of points)v.circle(x+w/2+dx+3,608+dy,2.7,P.gold);
+      }else v.weapon(o.type,x+w/2,616,.9,P.gold);
+      v.text(o.name,x+w/2,647,16,P.ink,'center','600');v.text(o.tag,x+w/2,674,11,P.muted,'center');
+      if(on)v.text('✓',x+w-14,608,12,P.gold,'center');v.hit(`trip:pick:${o.id}`,x,594,w,96);
+    });
+    const labels={recruit:`招募${choice.name} · +6 兵`,hero:`${choice.name}领军 · 带上亲兵`,route:`前往${choice.name}`,formation:`采用${choice.name}`,defeat:`改用${choice.name}`};
+    primary(v,'trip:confirm',labels[e.phase]);
+    v.text('选择预览',195,508,11,'#dfdfbf','center');
+  }else{
+    const list=X.troopList(e);
+    v.text(e.stage===0?'军队已集结，等你下令':'整备完成，出发吧',195,548,22,P.ink,'center','600');
+    v.text(l.hint,195,579,13,P.muted,'center');
+    const counts=Object.entries(list.reduce((m,t)=>(m[t]=(m[t]||0)+6,m),{}));
+    const w=counts.length<=2?145:105,gap=8,start=(390-counts.length*w-(counts.length-1)*gap)/2;
+    counts.forEach(([t,n],i)=>{const x=start+i*(w+gap);v.box(x,607,w,57,'#253e30',10);v.weapon(t,x+24,633,.7,P.gold);v.text(`${X.NAMES[t]} ${n}`,x+44,634,13,P.ink);});
+    v.text(e.route==='forge'?'军械营：本次出征士兵生命 +25% · 伤害 +20%':`${X.HERO_NAMES[e.heroId]}统军 · ${list.length*6} 名士兵`,195,683,11,P.muted,'center');
+    primary(v,'trip:start',e.stage===0?'开拔 · 攻下前哨':e.stage===4?'出战 · 夺下青石关':'出战 · '+l.short);
+  }
+}
+function complete(v,e) {
+  v.text('第一章 · 五战告捷',195,546,23,P.gold,'center','600');
+  v.text(e.reward?`军功 +${e.reward}`:'此章奖励已领取',195,583,21,P.ink,'center','600');
+  v.text('武将、兵营、军中委托现已开放',195,620,14,P.muted,'center');
+  v.text(e.adopted?'主将与编队带回营地，兵员补满三十人。':'原有主将、编队与征途进度已保留。',195,652,12,P.muted,'center');
+  v.text(e.route==='forge'?'军械营强化仅在本次出征生效':'回营后可用军功升级武将与士兵',195,678,11,'#8f9f8d','center');
+  primary(v,'trip:camp','回营整备 · 下一段征途');
+}
+function menu(v) {
+  const e=v.a.p.expedition,c=v.c;c.fillStyle='#07130fe0';c.fillRect(0,0,390,780);v.a.hits=[];
+  v.box(24,250,342,292,P.panel,18,'#6d8163');v.text('行军暂歇',195,289,23,P.gold,'center','600');
+  v.text('已自动保存，回来可以接着走。',195,327,14,P.muted,'center');
+  v.button('close','继续出征',44,365,302,50,true);v.button('trip:camp','返回营地 · 保留原有进度',44,433,302,48);
+  if(e.phase==='complete')v.text('已完成首征',195,510,12,P.muted,'center');
+}
+function camp(v) {
+  const p=v.a.p,e=p.expedition,l=G.J.levelFor(p.journey.levelId),finished=e.phase==='complete';
+  v.text('夺 帅',24,34,23,P.gold,'left','600');v.text(`军功 ${G.money(p)}`,366,34,14,P.gold,'right');
+  v.text('下一程，兵锋所指。',24,80,25,P.ink,'left','600');
+  v.text(finished?`已破 ${G.J.completedOf(p.journey).length} 战 · 整备后继续出征`:'青石关首征进行中 · 原有进度已保留',24,114,12,P.muted);
+  scenery(v,4,true);
+  for(const [x,y,s] of [[86,301,.8],[289,315,.7],[187,368,1.1]]){
+    const c=v.c;c.save();c.translate(x,y);c.scale(s,s);
+    c.fillStyle='#173326';c.beginPath();c.ellipse(0,23,51,11,0,0,Math.PI*2);c.fill();
+    poly(v,[[-43,18],[0,-34],[43,18]],'#c4b17d');poly(v,[[0,-34],[43,18],[12,13]],'#87916b');
+    v.box(-9,-2,18,23,'#344d36',1);flag(v,0,-61,'#52846b','军',.6);c.restore();
+  }
+  v.box(20,407,350,88,'#172f26ee',14,'#637650');v.portrait(p.journey.config.heroId,56,447,25);
+  v.text(`${X.HERO_NAMES[p.journey.config.heroId]} · 统帅 ${p.journey.training.heroLevel} 级`,99,433,19,P.ink,'left','600');
+  v.text(finished?'下一战 · '+l.name:'首征 · '+X.ENCOUNTERS[e.stage].name,99,464,13,P.gold);
+  [['heroes','武将','升级 · 加点','将'],['barracks','兵营','强化士兵','兵'],['missions','委托','赚取军功','旗']].forEach(([id,name,sub,icon],i)=>{
+    const x=20+i*119;v.box(x,524,112,110,'#253c2f',12,'#4b6149');v.text(icon,x+56,552,24,P.gold,'center','600');
+    v.text(name,x+56,588,17,P.ink,'center');v.text(sub,x+56,616,11,P.muted,'center');v.hit(`nav:${id}`,x,524,112,110);
+  });
+  const ready=G.supply(p,v.a.clock());v.text(ready?`营地补给 +${ready} · 点击领取`:'营地补给积存中',24,668,12,P.muted);v.hit('claim',20,646,235,43);
+  v.text('战图 ›',347,668,13,P.gold,'right');v.hit('go',281,646,89,43);
+  primary(v,finished?'trip:continue':'trip:open',finished?'出征 · '+l.name:'继续首征 · '+X.ENCOUNTERS[e.stage].short);
+}
+module.exports={draw,menu,camp};
+
+},
 "src/view.js":function(require,module,exports){
 const G=require('./core.js');
 const O=require('./onboarding.js');
+const ExpeditionView=require('./expedition-view.js');
 const {BattleRenderer}=require('../engine/renderer.js');
 const COLORS={bg:'#101f20',panel:'#1a3031',line:'#36504b',ink:'#f1e8ce',muted:'#98aaa0',gold:'#e2c181',green:'#9acbb0',red:'#df947f'};
 const NAMES={bladeShield:'刀盾',spear:'长枪',archer:'弓兵',cavalry:'骑兵',liubei:'刘备',huangzhong:'黄忠',zhaoyun:'赵云',balanced:'均衡阵',shieldWall:'盾墙阵',spearhead:'锋矢阵',wings:'鹤翼阵'};
@@ -2753,7 +3069,7 @@ const ROLES={bladeShield:'挡箭 · 前排',spear:'反骑 · 拦截',archer:'远
 const SHORT={bladeShield:'盾',spear:'枪',archer:'弓',cavalry:'骑'};
 class View{
  constructor(c,a){this.c=c;this.a=a;this.r=Object.create(BattleRenderer.prototype);Object.assign(this.r,{ctx:c,previous:new Map(),deaths:[],visualHits:[],lastTime:0,frame:0});}
- resetBattle(){this.r.reset();this.battleCamera=null;}
+ resetBattle(){this.r.reset();this.battleCamera=null;this.expeditionCamera=null;}
  guideSnapshot(){return O.coach(this.a);}
  battleViewport(units,time){
   const alive=units.filter(u=>u.alive);if(!alive.length)return;
@@ -2889,7 +3205,7 @@ class View{
  if(s.type==='reset'){this.text('重新训练',32,220,20);this.text('返还全部训练军功',195,350,21,COLORS.gold,'center');this.text('统帅与兵营回到初始等级',195,402,15,COLORS.muted,'center');this.text('超出等级额度的技能点会一起返还',195,437,12,COLORS.muted,'center');this.button('resetTraining','确认重配',32,641,326,54,true);}
  if(s.type==='retreat'){this.text('撤回整军',32,220,20);this.text('本场不结算奖励',195,370,20,COLORS.ink,'center');this.button('resume','继续战斗',32,556,326,52,true);this.button('retreat','撤回布阵',32,625,326,52);}
  }
- draw(){const a=this.a,c=this.c;a.hits=[];c.fillStyle=COLORS.bg;c.fillRect(0,0,390,780);for(let i=0;i<16;i++)this.line(0,i*55,390,i*55-100,'#bfd1a504');({welcome:()=>this.welcome(),academy:()=>this.academy(),manual:()=>this.manual(),camp:()=>this.camp(),map:()=>this.map(),missions:()=>this.missions(),prepare:()=>this.prepare(),heroes:()=>this.heroes(),barracks:()=>this.barracks(),battle:()=>this.drawBattle(),result:()=>this.result()}[a.screen]||(()=>this.camp()))();if(['camp','map','heroes','barracks'].includes(a.screen))this.tabs();if(a.sheet)this.sheet();this.coach();if(a.toast&&a.toast.until>a.now&&!O.coach(a)){this.box(18,16,354,42,'#e2c181');this.text(a.toast.text,195,37,12,'#17322b','center');}if(a.saveError)this.text('存档不可用',195,775,10,COLORS.red,'center');}
+ draw(){const a=this.a,c=this.c;a.hits=[];c.fillStyle=COLORS.bg;c.fillRect(0,0,390,780);for(let i=0;i<16;i++)this.line(0,i*55,390,i*55-100,'#bfd1a504');({welcome:()=>this.welcome(),academy:()=>this.academy(),manual:()=>this.manual(),expedition:()=>ExpeditionView.draw(this),camp:()=>a.flow==='expedition'?ExpeditionView.camp(this):this.camp(),map:()=>this.map(),missions:()=>this.missions(),prepare:()=>this.prepare(),heroes:()=>this.heroes(),barracks:()=>this.barracks(),battle:()=>a.mode==='expedition'?ExpeditionView.draw(this):this.drawBattle(),result:()=>this.result()}[a.screen]||(()=>this.camp()))();if(['camp','map','heroes','barracks'].includes(a.screen)&&!(a.flow==='expedition'&&a.screen==='camp'))this.tabs();if(a.sheet){if(a.sheet.type==='expeditionMenu')ExpeditionView.menu(this);else this.sheet();}this.coach();if(a.toast&&a.toast.until>a.now&&!O.coach(a)){this.box(18,16,354,42,'#e2c181');this.text(a.toast.text,195,37,12,'#17322b','center');}if(a.saveError)this.text('存档不可用',195,775,10,COLORS.red,'center');}
 }
 function localDay(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
 module.exports={View};
@@ -2898,14 +3214,16 @@ module.exports={View};
 "src/app.js":function(require,module,exports){
 const G = require('./core.js');
 const O = require('./onboarding.js');
+const X = require('./expedition.js');
 const {View} = require('./view.js');
-function createGame({canvas, load = () => null, save = () => {}, legacy = null, onSound = () => {}, now = () => Date.now()}) {
+function createGame({canvas, load = () => null, save = () => {}, legacy = null, onSound = () => {}, now = () => Date.now(), entry = 'expedition'}) {
   let saved;
   try {saved = load(G.KEY);} catch (_) {}
   const p = G.clean(saved, legacy, now());
-  const a = {p, screen: p.guide.status === 'new' ? 'welcome' : 'camp', sheet: null, tab: 0,
+  const opening = entry !== 'legacy' && p.expedition.phase !== 'complete';
+  const a = {p, flow: entry, screen: opening ? 'expedition' : entry === 'legacy' && p.guide.status === 'new' ? 'welcome' : 'camp', sheet: null, tab: 0,
     chapter: G.J.chapterReached(p.journey) - 1, hero: p.journey.config.heroId,
-    mode: 'main', army: 0, enemyArmy: 0, lesson: 0, practiceConfig: null,
+    mode: opening ? 'expedition' : 'main', expeditionChoice: null, army: 0, enemyArmy: 0, lesson: 0, practiceConfig: null,
     run: null, result: null, speed: 1, paused: false, toast: null, now: 0, hits: [], saveError: false, clock: now};
   const view = new View(canvas.getContext('2d'), a);
   function persist() {try {save(G.KEY, p); a.saveError = false;} catch (_) {a.saveError = true; toast('存档不可用，请勿关闭此页');}}
@@ -2947,6 +3265,24 @@ function createGame({canvas, load = () => null, save = () => {}, legacy = null, 
   function dispatch(id) {
     if (p.sound) onSound(id);
     const [kind, val] = id.split(':');
+    if (kind === 'trip') {
+      if (val === 'continue') {prepare('main', p.journey.levelId); return;}
+      if (val === 'open') {a.mode = 'expedition'; a.run = null; a.expeditionChoice = null; enter('expedition'); persist(); return;}
+      if (val === 'menu') {a.sheet = {type:'expeditionMenu'}; return;}
+      if (val === 'camp') {a.mode = 'main'; enter('camp'); persist(); return;}
+      if (val === 'replay') {p.expedition = X.fresh(); a.mode = 'expedition'; a.run = null; a.expeditionChoice = null; enter('expedition'); persist(); return;}
+      if (a.screen !== 'expedition') return;
+      if (val === 'pick') {if (X.options(p.expedition).some(o => o.id === id.split(':')[2])) a.expeditionChoice = id.split(':')[2]; return;}
+      if (val === 'confirm') {
+        if (X.choose(p.expedition, a.expeditionChoice || X.options(p.expedition)[0]?.id)) {a.expeditionChoice = null; a.run = null; persist();}
+        return;
+      }
+      if (val === 'start' && p.expedition.phase === 'ready') {
+        a.run = G.start(p, 'expedition'); a.result = null; a.speed = 2; a.paused = false; a.mode = 'expedition';
+        enter('battle'); view.resetBattle(); persist();
+      }
+      return;
+    }
     if (kind === 'guide') {
       const cue = O.coach(a);
       if (val === 'ack' && cue) {p.guide.seen[cue.id] = true; persist();}
@@ -3018,7 +3354,7 @@ function createGame({canvas, load = () => null, save = () => {}, legacy = null, 
     if (kind === 'speed') {a.speed = a.speed === 1 ? 2 : a.speed === 2 ? 4 : 1; return;}
     if (kind === 'pause') {a.paused = !a.paused; return;}
     if (kind === 'retreatAsk') {a.paused = true; a.sheet = {type: 'retreat'}; return;}
-    if (kind === 'retreat') {a.run = null; enter('prepare'); return;}
+    if (kind === 'retreat') {a.run = null; enter(a.mode === 'expedition' ? 'expedition' : 'prepare'); return;}
     if (kind === 'resume') {a.sheet = null; a.paused = false; return;}
     if (kind === 'nextRound') {G.advance(a.run, p); view.resetBattle(); a.paused = false; return;}
     if (kind === 'retry') {if (a.mode === 'academy') {a.run = null; enter('prepare');} else prepare(a.mode, a.run.levelId); return;}
@@ -3031,7 +3367,7 @@ function createGame({canvas, load = () => null, save = () => {}, legacy = null, 
       const r = a.run;
       if (!r.mission || r.mission.status !== 'between') G.step(r, Math.min(.12, dt) * a.speed);
       const result = G.finish(p, r);
-      if (result) {a.result = result; persist(); enter('result');}
+      if (result) {a.result = result; a.expeditionChoice = null; persist(); enter(r.mode === 'expedition' ? 'expedition' : 'result');}
     }
   }
   function draw() {syncGuide(); view.draw();}
