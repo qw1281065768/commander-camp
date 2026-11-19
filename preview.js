@@ -3388,4 +3388,443 @@ function createGame({canvas, load = () => null, save = () => {}, legacy = null, 
 }
 module.exports = {createGame};
 
-}},cache={};function load(id){if(cache[id])return cache[id].exports;const m={exports:{}};cache[id]=m;modules[id](relative=>{const parts=id.split('/');parts.pop();for(const p of relative.split('/')){if(p==='..')parts.pop();else if(p!=='.')parts.push(p);}return load(parts.join('/'));},m,m.exports);return m.exports;}globalThis.CommanderGame=load('src/app.js');})();
+},
+"src/rogue/data.js":function(require,module,exports){
+const NAMES = {liubei:'刘备',huangzhong:'黄忠',zhaoyun:'赵云',bladeShield:'刀盾',spear:'长枪',archer:'弓兵',cavalry:'骑兵',balanced:'均衡阵',shieldWall:'盾墙阵',wings:'鹤翼阵',spearhead:'锋矢阵'};
+const ROLES = {bladeShield:'举盾挡箭 · 正面迎敌',spear:'长枪拦骑 · 怕远程集火',archer:'远程输出 · 需要前排',cavalry:'突击刀盾 · 避开长枪'};
+const HEROES = [
+ {id:'liubei',role:'护阵续战',detail:'刀盾、长枪生命 +15%',skill:'满蓝：为附近士兵回血、加盾'},
+ {id:'huangzhong',role:'弓阵齐射',detail:'弓兵伤害 +20%',skill:'满蓝：附近弓兵短暂加速射击'},
+ {id:'zhaoyun',role:'骑兵突击',detail:'骑兵伤害 +15% · 移速 +25%',skill:'满蓝：附近骑兵加盾、加速'}
+];
+const AUGMENTS = [
+ {id:'riposte',name:'盾反齐射',glyph:'盾',tag:'刀盾 × 弓兵',lines:['刀盾格挡箭矢时，最近弓兵','立即准备好下一箭；每兵 2 秒一次'],needs:['bladeShield','archer']},
+ {id:'brace',name:'拒马军阵',glyph:'枪',tag:'长枪 × 反骑',lines:['长枪首次刺中骑兵，获得 45 护盾','并使目标减速 35%，持续 3 秒'],needs:['spear']},
+ {id:'volley',name:'乘胜追射',glyph:'弓',tag:'弓兵 × 减速',lines:['弓兵命中减速目标，追加 12 伤害','可接续「拒马军阵」或「诱敌深入」'],needs:['archer']},
+ {id:'charge',name:'破阵冲锋',glyph:'骑',tag:'骑兵 × 首击',lines:['骑兵首次命中，追加 32 伤害','自身获得 25 护盾，持续 4 秒'],needs:['cavalry']},
+ {id:'rally',name:'鸣鼓进军',glyph:'鼓',tag:'主将 × 全军',lines:['主将施法后，全军获得 20 护盾','并加速行军 3 秒'],needs:[]},
+ {id:'snare',name:'诱敌深入',glyph:'缓',tag:'护主 × 控场',lines:['靠近我方主将 4 格的敌人','移速降低 25%；离开后恢复'],needs:[]},
+ {id:'mend',name:'战地医官',glyph:'医',tag:'续战 × 伤兵',lines:['每 8 秒，治疗最受伤的 6 名士兵','各恢复 24 生命'],needs:[]},
+ {id:'chain',name:'连弩机括',glyph:'弩',tag:'弓兵 × 连击',lines:['连续射击同一目标，射速逐次提升','最多提升 36%；换目标重新累计'],needs:['archer']},
+ {id:'second',name:'背水一战',glyph:'战',tag:'主将 × 逆转',lines:['主将生命首次低于 40% 时','获得 120 护盾，并立即蓄满蓝量'],needs:[]},
+ {id:'oath',name:'同袍之誓',glyph:'义',tag:'近战 × 护盾',lines:['近战士兵阵亡时，为最近 2 名友军','各加 30 护盾；每名士兵仅触发一次'],needs:[]}
+];
+const lesson=(name,goal,hint,types,count,hero,preset,player)=>({name,goal,hint,types,count,hero,preset,player});
+const LESSONS = [
+ lesson('接过军旗','击败敌将，赢下第一战','敌将阵亡即获胜；技能满蓝自动释放。',['spear','spear'],3,'liubei','balanced',['bladeShield','bladeShield']),
+ lesson('骑兵来袭','换兵，挡住敌军骑袭','点编号编队换兵；试试两队长枪。',['cavalry','cavalry','bladeShield'],4,'liubei','wings',['bladeShield','bladeShield','spear']),
+ lesson('盾前弓后','选一个能保护弓兵的阵型','盾墙收拢前排；弓兵需要有人挡箭。',['archer','archer','spear','archer'],4,'huangzhong','shieldWall',['bladeShield','bladeShield','archer','archer']),
+ lesson('将兵相合','为这支军队选择主将','刘备护步兵、黄忠带弓、赵云带骑。',['spear','bladeShield','spear','archer'],5,'liubei','balanced',['bladeShield','spear','archer','archer','cavalry']),
+ lesson('军策初成','观察你的第一枚海克斯','战斗中会显示军策触发，战后能看效果。',['archer','spear','archer','cavalry','archer'],4,'huangzhong','shieldWall',null),
+ lesson('独当一面','用自己的搭配拿下青石关','先看敌军，再选英雄、兵种和阵型。',['bladeShield','spear','archer','cavalry','archer'],5,'huangzhong','balanced',null)
+];
+const ENEMIES = [
+ {id:'raiders',name:'山道游骑',hero:'zhaoyun',preset:'wings',types:['cavalry','cavalry','bladeShield','cavalry','spear'],hint:'骑兵多，长枪能守住突破口。'},
+ {id:'bows',name:'林口箭阵',hero:'huangzhong',preset:'shieldWall',types:['archer','archer','spear','archer','archer'],hint:'刀盾能挡箭；骑兵要绕开中央长枪。'},
+ {id:'spears',name:'长枪营垒',hero:'liubei',preset:'balanced',types:['spear','spear','bladeShield','spear','spear'],hint:'长枪缺少挡箭能力，但近身后很危险。'},
+ {id:'shields',name:'重盾护军',hero:'liubei',preset:'shieldWall',types:['bladeShield','bladeShield','spear','bladeShield','archer'],hint:'厚盾挡住箭雨；骑兵可以打穿薄侧翼。'},
+ {id:'split',name:'两翼伏军',hero:'huangzhong',preset:'wings',types:['cavalry','archer','spear','archer','cavalry'],hint:'两侧骑兵牵制；前排集中，先破一路。'},
+ {id:'gate',name:'青石守将',hero:'liubei',preset:'spearhead',types:['bladeShield','spear','archer','cavalry','archer'],hint:'混合守军没有单一弱点，检验整套组合。'}
+];
+const TRAINING = [
+ {id:'hero',name:'统帅修习',icon:'将',detail:'所有英雄生命、伤害每级 +3%',cost:4,max:3},
+ {id:'troops',name:'兵营操练',icon:'兵',detail:'所有兵种生命、伤害每级 +3%',cost:4,max:3},
+ {id:'formation',name:'研习锋矢',icon:'阵',detail:'解锁锋矢阵，集中兵力突击',cost:6,max:1},
+ {id:'planning',name:'军策研修',icon:'策',detail:'每次征途额外获得 1 次海克斯重选',cost:6,max:1}
+];
+module.exports={NAMES,ROLES,HEROES,AUGMENTS,LESSONS,ENEMIES,TRAINING};
+
+},
+"src/rogue/battle.js":function(require,module,exports){
+// Rule adapter: all navigation, targeting, counters and hero skills still run
+// through the shared simulator. Augments observe actual hits and casts.
+const E=require('../../engine/engine.js');
+const C=require('../../engine/campaign.js');
+const D=require('./data.js');
+const distance=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+function roster(config,count=6){
+ const types=config.troops,filled=[...types];while(filled.length<5)filled.push('bladeShield');
+ return C.formationFor(config.preset,filled).filter(s=>s.type==='commander'||C.PLAYER_SLOTS.findIndex(p=>p.id===s.id)<types.length).map(s=>{const i=C.PLAYER_SLOTS.findIndex(p=>p.id===s.id),pos=config.positions?.[i];return {...s,...(pos?{x:pos[0],y:pos[1]}:{}),count:s.type==='commander'?1:count};});
+}
+function reflow(config){const ordered=roster({...config,positions:null}).filter(s=>s.type!=='commander').sort((a,b)=>a.y-b.y||a.x-b.x);return {...config,troops:ordered.map(s=>s.type),positions:ordered.map(s=>[s.x,s.y])};}
+function installAugments(b,ids){
+ const has=id=>ids.includes(id),seenDead=new Set(),first=new Set(),blocks=new Map(),chains=new Map();
+ const baseSpeed=new Map(b.units.map(u=>[u.id,u.speedMultiplier||1]));
+ const baseStats=new Map(b.units.map(u=>[u.id,u.combatStats||b.unitTypes[u.type]]));
+ const oldBefore=b.movement.beforeTick?.bind(b.movement),oldHits=b.movement.afterHits?.bind(b.movement);
+ let casts=0,nextHeal=8,lastRally=-10,second=false;
+ b.augmentMetrics=Object.fromEntries(ids.map(id=>[id,{triggers:0,damage:0,healing:0,shield:0}]));
+ b.augmentPulses=[];
+ function proc(id,values={}){
+  const m=b.augmentMetrics[id];m.triggers++;for(const [k,v]of Object.entries(values))m[k]+=v;
+  if(!b.augmentPulses.some(p=>p.id===id&&b.time-p.time<.8))b.augmentPulses.push({id,time:b.time});
+  b.augmentPulses=b.augmentPulses.slice(-8);
+ }
+ function shield(u,n,seconds=4){const gain=Math.max(0,n-u.shield);u.shield=Math.max(u.shield,n);u.shieldUntil=Math.max(u.shieldUntil,b.time+seconds);return gain;}
+ function hurt(u,t,amount){const absorbed=Math.min(t.shield,amount);t.shield-=absorbed;const harm=Math.min(Math.max(0,t.hp),amount-absorbed);t.hp=Math.max(0,t.hp-harm);u.damageDone+=harm;b.stats[u.side].damage+=harm;if(t.type==='commander')u.commanderDamage+=harm;return harm;}
+ b.movement.beforeTick=(s,dt)=>{
+  oldBefore?.(s,dt);
+  const alive=b.units.filter(u=>u.alive&&u.hp>0),allies=alive.filter(u=>u.side==='blue'),chief=allies.find(u=>u.type==='commander');
+  if(has('rally')&&b.stats.blue.casts>casts){lastRally=b.time;let amount=0;for(const u of allies)amount+=shield(u,20,3);proc('rally',{shield:amount});}
+  casts=b.stats.blue.casts;
+  for(const u of b.units){
+   const snared=has('snare')&&chief&&u.side==='red'&&distance(u,chief)<4;
+   const slow=snared||u.rogueSlowUntil>b.time;
+   u.rogueSlowed=slow;
+   u.speedMultiplier=baseSpeed.get(u.id)*(slow?(u.rogueSlowUntil>b.time?.65:.75):1)*(u.side==='blue'&&b.time-lastRally<3?1.25:1);
+   if(snared&&!first.has(`snare:${u.id}`)){first.add(`snare:${u.id}`);proc('snare');}
+  }
+  if(has('second')&&chief&&!second&&chief.hp/chief.maxHp<.4){second=true;chief.mana=chief.manaMax;proc('second',{shield:shield(chief,120,6)});}
+  if(has('mend')&&b.time>=nextHeal){nextHeal+=8;let healing=0;for(const u of allies.filter(u=>u.type!=='commander'&&u.hp<u.maxHp).sort((a,c)=>a.hp/a.maxHp-c.hp/c.maxHp).slice(0,6)){const n=Math.min(24,u.maxHp-u.hp);u.hp+=n;healing+=n;}if(healing)proc('mend',{healing});}
+  if(has('oath'))for(const dead of b.units.filter(u=>u.side==='blue'&&!u.alive&&['bladeShield','spear','cavalry'].includes(u.type))){
+   if(seenDead.has(dead.id))continue;seenDead.add(dead.id);let amount=0;for(const u of allies.sort((a,c)=>distance(a,dead)-distance(c,dead)).slice(0,2))amount+=shield(u,30);proc('oath',{shield:amount});
+  }
+ };
+ b.movement.afterHits=(s,hits)=>{
+  oldHits?.(s,hits);
+  for(const {u,target,absorbed}of hits){
+   if(has('riposte')&&u.side==='red'&&u.type==='archer'&&target.type==='bladeShield'&&target.hp>0&&b.time>=(blocks.get(target.id)||0)){
+    const bow=b.units.filter(a=>a.side==='blue'&&a.type==='archer'&&a.alive&&a.hp>0).sort((a,c)=>distance(a,target)-distance(c,target))[0];
+    if(bow){bow.cooldown=0;blocks.set(target.id,b.time+2);proc('riposte');}
+   }
+   if(u.side!=='blue')continue;
+   if(has('brace')&&u.type==='spear'&&target.type==='cavalry'&&!first.has(`brace:${u.id}`)&&u.hp>0){first.add(`brace:${u.id}`);target.rogueSlowUntil=b.time+3;target.rogueSlowed=true;proc('brace',{shield:shield(u,45,3)});}
+   if(has('charge')&&u.type==='cavalry'&&!first.has(`charge:${u.id}`)){first.add(`charge:${u.id}`);proc('charge',{damage:hurt(u,target,32),shield:u.hp>0?shield(u,25):0});}
+   if(has('volley')&&u.type==='archer'&&target.rogueSlowed)proc('volley',{damage:hurt(u,target,12)});
+   if(has('chain')&&u.type==='archer'){
+    const prev=chains.get(u.id),stacks=prev?.target===target.id?Math.min(3,prev.stacks+1):0;chains.set(u.id,{target:target.id,stacks});
+    const spec=baseStats.get(u.id);u.combatStats={...spec,interval:spec.interval/(1+stacks*.12)};
+    u.cooldown=Math.min(u.cooldown,u.combatStats.interval/(u.hasteUntil>b.time?1.3:1));if(stacks)proc('chain');
+   }
+  }
+ };
+ return b;
+}
+function createBattle(config,encounter,ids=[],training={}){
+ const red=E.mirrorFormation(roster({troops:encounter.types,preset:encounter.preset},encounter.count),'rogue-red');
+ const b=E.createLabBattle({blue:roster(config),red,heroes:{blue:config.heroId,red:encounter.hero},scenarioId:encounter.id||encounter.name,aiMode:'roles',combatVersion:E.CAMPAIGN_COMBAT_VERSION});
+ for(const u of b.units.filter(u=>u.side==='blue')){
+  const rank=u.type==='commander'?training.hero||0:training.troops||0,mult=1+rank*.03;
+  u.baseHp=(u.baseHp||b.unitTypes[u.type].hp)*mult;u.hp*=mult;u.maxHp*=mult;u.damageMultiplier=(u.damageMultiplier||1)*mult;
+ }
+ installAugments(b,ids);b.status='running';return b;
+}
+module.exports={roster,reflow,createBattle,installAugments,step:E.stepBattle};
+
+},
+"src/rogue/model.js":function(require,module,exports){
+const D=require('./data.js');
+const B=require('./battle.js');
+const KEY='commander-rogue-v4';
+const clone=x=>JSON.parse(JSON.stringify(x));
+const int=(x,a,b)=>Math.max(a,Math.min(b,Math.floor(Number(x)||0)));
+const ALL_TROOPS=['bladeShield','spear','archer','cavalry'];
+function fresh(){return {version:4,tutorial:0,coins:0,clears:0,training:{hero:0,troops:0,formation:0,planning:0},config:{heroId:'liubei',troops:['bladeShield','bladeShield'],preset:'balanced'},run:null,summary:null};}
+function unlocked(p){const t=p.tutorial;return {troops:ALL_TROOPS.slice(0,t>=3?4:t>=2?3:t>=1?2:1),heroes:D.HEROES.slice(0,t>=3?3:1).map(h=>h.id),formations:t>=2?['balanced','shieldWall','wings',...(p.training.formation?['spearhead']:[])]:['balanced']};}
+function cleanConfig(c,p){const u=unlocked(p),n=p.tutorial>=3?5:p.tutorial>=2?4:p.tutorial>=1?3:2;const config={heroId:u.heroes.includes(c?.heroId)?c.heroId:'liubei',troops:Array.from({length:n},(_,i)=>u.troops.includes(c?.troops?.[i])?c.troops[i]:'bladeShield'),preset:u.formations.includes(c?.preset)?c.preset:'balanced'};const valid=Array.isArray(c?.positions)&&c.positions.length===n&&c.positions.every(v=>Array.isArray(v)&&v.length===2&&Number.isFinite(v[0])&&v[0]>=1.5&&v[0]<=11.5&&Number.isFinite(v[1])&&v[1]>=1.5&&v[1]<=16.5);return valid?{...config,positions:clone(c.positions)}:B.reflow(config);}
+function startTutorialRun(p){p.run={kind:'tutorial',seed:1,step:p.tutorial,phase:'ready',config:cleanConfig(p.config,p),augments:[],bank:0,won:[],losses:0,rerolls:0,draft:0,offers:[],selected:null,report:null};return p.run;}
+function rng(seed){let s=seed>>>0;return ()=>{s=(Math.imul(s,1664525)+1013904223)>>>0;return s/4294967296;};}
+function makeNodes(seed,difficulty=1){
+ const random=rng(seed),out=[];
+ for(let zone=0;zone<2;zone++){
+  const list=D.ENEMIES.slice(0,5).map(e=>({e,roll:random()})).sort((a,b)=>a.roll-b.roll).slice(0,3);
+  list.forEach(({e},i)=>out.push({...e,id:`z${zone}-${i}`,zone,kind:['battle','rescue','elite'][i],count:Math.min(e.id==='spears'?6:7,4+zone+difficulty+(i===2?1:0)),reward:i===2?3:2}));
+ }
+ out.push({...D.ENEMIES[5],id:'boss',zone:2,kind:'boss',count:5+difficulty,reward:4});return out;
+}
+function startJourney(p,seed=Date.now()){
+ if(p.tutorial<6||p.run)return false;
+ p.run={kind:'journey',seed:seed>>>0,difficulty:1,phase:'map',config:clone(p.config),augments:[],bank:0,won:[],losses:0,rerolls:1+p.training.planning,draft:0,offers:[],selected:null,report:null};return true;
+}
+function zoneFor(r){return r.won.length<2?0:r.won.length<4?1:2;}
+function nodes(r){return makeNodes(r.seed,r.difficulty).filter(n=>n.zone===zoneFor(r));}
+function encounter(r){return r.kind==='tutorial'?{...D.LESSONS[r.step],id:`lesson-${r.step}`} :makeNodes(r.seed,r.difficulty).find(n=>n.id===r.selected);}
+function selectNode(p,id){const r=p.run;if(!r||r.kind!=='journey'||r.phase!=='map')return false;const n=nodes(r).find(n=>n.id===id&&!r.won.includes(id));if(!n)return false;r.selected=id;r.phase='ready';return true;}
+function applicable(r){return D.AUGMENTS.filter(a=>!r.augments.includes(a.id)&&a.needs.every(t=>r.config.troops.includes(t))&&(a.id!=='volley'||r.augments.some(id=>['brace','snare'].includes(id))));}
+function offers(r){
+ const pool=applicable(r),random=rng(r.seed+r.won.length*1831+r.draft*7907+(r.step||0)*11);
+ const shuffled=pool.map(a=>({a,n:random()})).sort((a,b)=>a.n-b.n).map(x=>x.a.id);
+ // Keep at least one broadly usable option; show a combo when its source is owned.
+ const out=shuffled.slice(0,3),combo=r.augments.some(id=>['brace','snare'].includes(id))&&pool.find(a=>a.id==='volley');
+ if(combo&&!out.includes('volley'))out[0]='volley';
+ const safe=pool.find(a=>a.needs.length===0&&!out.includes(a.id));
+ if(safe&&!out.some(id=>D.AUGMENTS.find(a=>a.id===id).needs.length===0))out[out.length-1]=safe.id;
+ return out;
+}
+function choose(p,id){const r=p.run;if(!r||r.phase!=='reward'||!r.offers.includes(id)||r.augments.includes(id))return false;r.augments.push(id);r.offers=[];r.phase=r.kind==='tutorial'?'ready':'map';return true;}
+function reroll(p){const r=p.run;if(!r||r.phase!=='reward'||r.rerolls<=0)return false;const old=r.offers;r.rerolls--;r.draft++;r.offers=offers(r);const newChoice=applicable(r).find(a=>!old.includes(a.id));if(newChoice&&r.offers.every(id=>old.includes(id)))r.offers[0]=newChoice.id;return true;}
+function build(p){const r=p.run;if(!r||r.phase!=='ready')return null;return B.createBattle(r.config,encounter(r),r.augments,r.kind==='tutorial'?{}:p.training);}
+function makeReport(b){
+ const own=b.units.filter(u=>u.side==='blue'),enemy=b.units.filter(u=>u.side==='red'),chief=own.find(u=>u.type==='commander'),danger=b.events.find(e=>e.side==='blue'&&e.type==='danger');
+ const best=own.filter(u=>u.type!=='commander').reduce((out,u)=>{out[u.type]=(out[u.type]||0)+u.damageDone;return out;},{});
+ const top=Object.entries(best).sort((a,c)=>c[1]-a[1])[0];
+ return {won:b.status==='won',time:Math.round(b.time),survivors:own.filter(u=>u.alive&&u.type!=='commander').length,enemySurvivors:enemy.filter(u=>u.alive&&u.type!=='commander').length,chiefHp:Math.round(chief.hp/chief.maxHp*100),reason:b.status==='draw'?'90 秒未能斩将，尝试增加突破能力。':danger?'主将曾遭到突袭，留意前排与两翼的保护。':'观察敌军前排，试着换兵或集中火力。',top:top?`${D.NAMES[top[0]]}造成 ${Math.round(top[1])} 伤害`:'主将接战',metrics:clone(b.augmentMetrics||{})};
+}
+function settle(p,b){
+ const r=p.run;if(!r||r.phase!=='fighting'||b.status==='running')return false;
+ r.report=makeReport(b);r.phase='result';if(!r.report.won){r.losses++;return true;}
+ if(r.kind==='tutorial'){
+  if(r.step===p.tutorial){p.tutorial++;p.coins+=2;}
+ }else if(!r.won.includes(r.selected)){
+  r.won.push(r.selected);r.bank+=encounter(r).reward;
+  if(encounter(r).kind==='rescue'){
+   if(!r.augments.includes('mend')){r.augments.push('mend');r.report.rescue='救下医官：获得「战地医官」军策';}
+   else{r.rerolls++;r.report.rescue='已有医官：额外获得 1 次军策重选';}
+  }
+ }
+ return true;
+}
+function next(p){
+ const r=p.run;if(!r||r.phase!=='result'||!r.report?.won)return false;
+ if(r.kind==='tutorial'){
+  if(p.tutorial>=6){p.config=clone(r.config);p.run=null;return true;}
+  r.step=p.tutorial;const l=D.LESSONS[r.step];if(l.player){r.config.troops=[...l.player];delete r.config.positions;}r.config=cleanConfig(r.config,p);p.config=clone(r.config);
+  r.phase=r.step>=4?'reward':'ready';r.offers=r.phase==='reward'?offers(r):[];
+ }else if(r.won.length>=5){cashOut(p,true);}
+ else{r.phase='reward';r.offers=offers(r);if(!r.offers.length)r.phase='map';}
+ return true;
+}
+function retry(p){const r=p.run;if(!r||r.phase!=='result'||r.report?.won)return false;r.phase='ready';return true;}
+function changeRoute(p){const r=p.run;if(!r||r.kind!=='journey'||!['ready','result'].includes(r.phase)||r.phase==='result'&&r.report?.won)return false;r.phase='map';r.selected=null;return true;}
+function cashOut(p,victory=false){
+ const r=p.run;if(!r||r.kind!=='journey')return false;
+ const win=victory&&r.won.length===5,bonus=win?4:0;p.coins+=r.bank+bonus;if(win)p.clears++;
+ p.summary={won:win,battles:r.won.length,reward:r.bank+bonus,augments:[...r.augments],heroId:r.config.heroId};p.config=clone(r.config);p.run=null;return true;
+}
+function train(p,id){if(p.run||p.tutorial<6)return false;const t=D.TRAINING.find(t=>t.id===id);if(!t||p.training[id]>=t.max||p.coins<t.cost)return false;p.coins-=t.cost;p.training[id]++;return true;}
+function clean(raw){
+ if(!raw||raw.version!==4)return fresh();
+ const p=fresh();p.tutorial=int(raw.tutorial,0,6);p.coins=int(raw.coins,0,100000);p.clears=int(raw.clears,0,1000);
+ for(const t of D.TRAINING)p.training[t.id]=int(raw.training?.[t.id],0,t.max);
+ p.config=cleanConfig(raw.config,p);p.summary=raw.summary&&typeof raw.summary==='object'?clone(raw.summary):null;
+ const r=raw.run;
+ if(r&&['tutorial','journey'].includes(r.kind)){
+  const validPhases=['map','ready','reward','result'];
+  p.run={kind:r.kind,seed:int(r.seed,0,4294967295),step:int(r.step,0,5),difficulty:int(r.difficulty,1,3),phase:validPhases.includes(r.phase)?r.phase:'ready',config:cleanConfig(r.config,r.kind==='tutorial'?{...p,tutorial:int(r.step,0,5)}:p),augments:[...new Set((Array.isArray(r.augments)?r.augments:[]).filter(id=>D.AUGMENTS.some(a=>a.id===id)))],won:[...new Set((Array.isArray(r.won)?r.won:[]).filter(id=>makeNodes(r.seed,r.difficulty).some(n=>n.id===id)))],losses:int(r.losses,0,10000),rerolls:int(r.rerolls,0,4),draft:int(r.draft,0,1000),selected:r.selected,report:r.report&&typeof r.report==='object'?clone(r.report):null,offers:[],bank:0};
+  const run=p.run;run.bank=makeNodes(run.seed,run.difficulty).filter(n=>run.won.includes(n.id)).reduce((s,n)=>s+n.reward,0);
+  if(run.kind==='journey'&&!encounter(run)&&run.phase!=='reward')run.phase='map';
+  if(run.phase==='result'&&!run.report)run.phase='ready';
+  if(run.phase==='reward'){run.offers=(Array.isArray(r.offers)?r.offers:[]).filter(id=>applicable(run).some(a=>a.id===id)).slice(0,3);if(!run.offers.length)run.offers=offers(run);}
+ }
+ return p;
+}
+module.exports={KEY,D,B,clone,fresh,clean,unlocked,cleanConfig,startTutorialRun,startJourney,makeNodes,nodes,zoneFor,encounter,selectNode,offers,choose,reroll,build,settle,next,retry,changeRoute,cashOut,train};
+
+},
+"src/rogue/view.js":function(require,module,exports){
+const {View}=require('../view.js');
+const M=require('./model.js');
+const {NAMES:N,ROLES,HEROES,AUGMENTS,LESSONS,TRAINING}=M.D;
+const P={bg:'#142823',panel:'#223b31',light:'#344f3c',ink:'#f3ead0',muted:'#afbaa2',gold:'#edcf8c',green:'#9dd6b0',red:'#e6a28e',line:'#50664b'};
+const SHORT={bladeShield:'盾',spear:'枪',archer:'弓',cavalry:'骑'};
+class RogueView extends View{
+ header(title,subtitle,back){
+  if(back){this.text('‹',24,34,28,P.gold);this.hit(back,8,10,48,48);}else this.text('夺 帅',22,32,16,P.gold,'left','600');
+  this.text('青石征途',368,31,12,P.muted,'right');
+  this.text(title,22,82,28,P.ink,'left','600');if(subtitle)this.text(subtitle,22,116,13,P.muted);
+ }
+ primary(id,label){this.button(id,label,20,705,350,56,true);}
+ small(id,label,x,y,w=106){this.button(id,label,x,y,w,44);}
+ panel(x,y,w,h){this.box(x,y,w,h,P.panel,14,P.line);}
+ scenery(y=146,h=374){
+  const c=this.c,g=c.createLinearGradient(0,y,0,y+h);g.addColorStop(0,'#69836a');g.addColorStop(.5,'#97a079');g.addColorStop(1,'#536d49');c.fillStyle=g;c.fillRect(12,y,366,h);
+  const poly=(pts,color)=>{c.fillStyle=color;c.beginPath();pts.forEach(([x,yy],i)=>i?c.lineTo(x,yy):c.moveTo(x,yy));c.closePath();c.fill();};
+  poly([[12,y+78],[57,y+22],[125,y+81],[203,y+13],[290,y+72],[378,y+25],[378,y+120],[12,y+120]],'#3d604750');
+  poly([[170,y+h],[235,y+h],[273,y+65],[242,y+65]],'#d6c59425');
+  for(let i=0;i<45;i++){const x=20+i*73%349,yy=y+40+i*41%(h-50);this.line(x,yy,x+4,yy-4,'#d3d9b52c');}
+ }
+ army(b,y=160,h=350,live=false){
+  this.scenery(y,h);const c=this.c,alive=b.units.filter(u=>u.alive);if(!alive.length)return;
+  const xs=alive.map(u=>u.x),ys=alive.map(u=>u.y),loX=Math.min(...xs),hiX=Math.max(...xs),loY=Math.min(...ys),hiY=Math.max(...ys);
+  const target=Math.min(19,306/Math.max(12,hiX-loX),Math.max(100,h-100)/Math.max(10,hiY-loY)),last=this.rogueCamera;
+  const scale=live&&last?last.scale+(target-last.scale)*.08:target;this.rogueCamera={scale};
+  Object.assign(this.r,{scale,ox:195-(loX+hiX)/2*scale,oy:y+h*.57-(loY+hiY)/2*scale,unitScale:1.25,commanderScale:.78});
+  c.save();c.beginPath();c.rect(13,y+1,364,h-2);c.clip();
+  if(live){this.r.readDamage(b.units,b.time);for(const u of this.r.deaths)this.r.drawCorpse(u,b.time);}
+  const sorted=alive.slice().sort((a,b)=>a.y-b.y);
+  for(const u of sorted.filter(u=>u.type==='commander'))this.r.drawUnit(u,live?b.time:this.a.now,false);
+  for(const u of sorted.filter(u=>u.type!=='commander'))this.r.drawUnit(u,live?b.time:this.a.now,false);
+  if(!live){b.formation.filter(s=>s.type!=='commander').forEach((s,i)=>{const q=this.r.point(s.x,s.y-1.1);this.circle(q.x-14,q.y-6,8,'#173c31');this.text(i+1,q.x-14,q.y-6,10,P.gold,'center','600');});}
+  if(live){this.r.drawEffects(b.effects,b.time);this.r.drawHitEffects(b.time);}
+  c.restore();
+  for(const [side,x,color]of [['blue',25,P.green],['red',220,P.red]]){
+   const u=b.units.find(u=>u.side===side&&u.type==='commander'),count=alive.filter(u=>u.side===side&&u.type!=='commander').length;
+   this.box(x,y+10,145,49,'#172d25e6',9);this.text(`${side==='blue'?'我':'敌'}·${N[b.heroes[side]]}  ${count}兵`,x+10,y+27,13,color);
+   this.box(x+10,y+43,125,4,'#465447',2);this.box(x+10,y+43,Math.max(0,125*u.hp/u.maxHp),4,color,2);
+   if(live)this.box(x+10,y+49,125*u.mana/u.manaMax,2,'#92b8d2',1);
+  }
+ }
+ preview(){const r=this.a.p.run,key=JSON.stringify([r.config,r.selected,r.step,r.augments,this.a.p.training]);if(this.previewKey!==key){this.previewKey=key;this.previewBattle=M.build(this.a.p);}return this.previewBattle;}
+ welcome(){
+  this.header('一将，千军，万般变化','排兵布阵 · 随机军策 · 自动交战');
+  const p=M.fresh();M.startTutorialRun(p);this.army(M.build(p),151,360);
+  this.text('接过军旗',195,551,25,P.ink,'center','600');
+  this.text('从六场短战开始，组建自己的军队。',195,591,14,P.muted,'center');
+  this.text('每次只做一个选择，战场会告诉你结果。',195,619,13,P.muted,'center');
+  this.primary('begin','开始第一战  ›');
+ }
+ ready(){
+  const p=this.a.p,r=p.run,l=M.encounter(r),t=r.kind==='tutorial',u=M.unlocked(p);
+  this.header(l.name,t?`军营试炼 ${r.step+1} / 6 · ${l.goal}`:`征途 ${r.won.length+1} / 5 · ${l.kind==='boss'?'守将':l.kind==='elite'?'精英':l.kind==='rescue'?'救援支线':'主线交锋'}`,t?'camp':'map');
+  const b=this.preview();if(b)this.army(b,145,330);
+  this.text(l.hint,195,498,12,P.muted,'center');
+  this.panel(20,523,350,68);this.portrait(r.config.heroId,54,557,19);
+  this.text(N[r.config.heroId],89,548,18,P.ink,'left','600');this.text(HEROES.find(h=>h.id===r.config.heroId).detail,89,574,12,P.gold);
+  if(u.heroes.length>1){this.text('换将 ›',346,553,13,P.gold,'right');this.hit('open:hero',20,523,350,68);}
+  r.config.troops.forEach((type,i)=>{const x=20+i*70;this.box(x,606,64,59,P.panel,10);this.weapon(type,x+31,626,.58,P.gold);this.text(`${i+1} ${SHORT[type]}`,x+32,651,11,P.ink,'center');if(u.troops.length>1)this.hit(`open:troops:${i}`,x,606,64,59);});
+  if(u.formations.length>1){this.text(`${N[r.config.preset]}  ›`,21,684,13,P.gold);this.hit('open:formation',15,668,170,32);}else this.text('击败敌将即可获胜',22,684,12,P.muted);
+  if(r.augments.length){this.text(`军策 ${r.augments.length}  ›`,368,684,13,P.gold,'right');this.hit('open:build',238,668,138,32);}
+  this.primary('start','出战  ›');
+ }
+ battle(){
+  const a=this.a,r=a.p.run,b=a.run.battle;
+  this.header(M.encounter(r).name,`自动交战 · ${Math.floor(b.time)} / 90 秒`,'open:retreat');this.army(b,143,425,true);
+  const pulse=b.augmentPulses.filter(x=>b.time-x.time<2.5).slice(-1)[0],skill=b.events.filter(e=>e.type==='skill'&&b.time-e.time<3).slice(-1)[0];
+  if(pulse){const aug=AUGMENTS.find(x=>x.id===pulse.id);this.box(43,581,304,40,'#4c5132',10,P.gold);this.text(`${aug.glyph}  ${aug.name} · 触发`,195,601,16,P.gold,'center','600');}
+  else this.text(skill?skill.text.split(' · ')[0]:'看前排接敌，留意主将的蓝条',195,602,13,P.muted,'center');
+  this.text(`${r.augments.length} 枚军策正在影响战斗`,195,646,12,P.muted,'center');
+  this.small('pause',a.paused?'继续战斗':'暂停',20,706,169);this.button('speed',`${a.speed} 倍速`,201,706,169,44,true);
+  if(a.paused&&!a.sheet){this.box(125,345,140,47,'#142823ee',12,P.gold);this.text('战斗已暂停',195,368,17,P.gold,'center');}
+ }
+ result(){
+  const p=this.a.p,r=p.run,v=r.report,t=r.kind==='tutorial';
+  this.header(v.won?'旗开得胜':'重整旗鼓',M.encounter(r).name);
+  this.circle(195,224,67,P.panel);this.circle(195,224,55,P.light);this.text(v.won?'胜':'战',195,223,62,P.gold,'center','600');
+  this.text(v.won?`用时 ${v.time} 秒 · 剩余 ${v.survivors} 兵`:`用时 ${v.time} 秒 · 敌军剩余 ${v.enemySurvivors} 兵`,195,326,16,P.ink,'center');
+  this.text(v.won?t?'军功 +2 · 已入营地':`本次已获 ${r.bank} 军功 · 结束征途时结算`:'兵力不损失，可以立即换阵再战',195,361,13,P.gold,'center');
+  this.panel(20,394,350,170);this.text(v.top,38,422,15,P.ink);this.text('军策实战记录',38,455,12,P.muted);
+  const stats=Object.entries(v.metrics).filter(([,m])=>m.triggers>0).slice(0,3);
+  if(!stats.length)this.text(r.augments.length?'本场没有触发军策，留意触发条件。':'下一步会逐渐开放更多选择。',38,490,12,P.muted);
+  stats.forEach(([id,m],i)=>{const effect=m.damage?`追加 ${Math.round(m.damage)} 伤害`:m.healing?`治疗 ${Math.round(m.healing)}`:m.shield?`护盾 ${Math.round(m.shield)}`:`触发 ${m.triggers} 次`;this.text(`${AUGMENTS.find(a=>a.id===id).name} · ${effect}`,38,487+i*27,13,P.gold);});
+  if(v.won){
+   const reward=v.rescue|| (t?['已解锁长枪 · 下场试试挡住骑兵','已解锁弓兵与阵型 · 保护远程输出','已解锁三名主将与骑兵','接下来：选择第一枚海克斯','再选军策，挑战试炼守将','试炼完成 · 征途与营地修习开放'][r.step]:'战后选择军策，为下一场组合铺路');
+   this.text(reward,195,603,12,P.muted,'center');this.primary('next',t&&p.tutorial===6?'回营，开始自己的征途  ›':!t&&r.won.length===5?'结算本次征途  ›':'继续  ›');
+  }else{
+   this.text(v.reason,195,601,12,P.muted,'center');
+   if(!t){this.small('map','换条路线',20,645,169);this.small('open:cashout','带回军功',201,645,169);}
+   this.primary('retry','调整阵容，再试一次  ›');
+  }
+ }
+ reward(){
+  const r=this.a.p.run;this.header('军策入阵',r.kind==='tutorial'?'选择一枚海克斯 · 仅本次出征生效':'三选一，让这支军队发生变化');
+  r.offers.forEach((id,i)=>{const q=AUGMENTS.find(a=>a.id===id),y=158+i*150;this.panel(20,y,350,134);this.circle(55,y+38,22,P.light);this.text(q.glyph,55,y+38,23,P.gold,'center');this.text(q.name,91,y+30,22,P.ink,'left','600');this.text(q.tag,91,y+57,12,P.gold);q.lines.forEach((s,k)=>this.text(s,38,y+88+k*24,13,P.muted));this.hit(`augment:${q.id}`,20,y,350,134);this.text('›',346,y+38,23,P.gold);});
+  this.text('点一张军策，立即带入下一场',195,642,13,P.muted,'center');
+  if(r.rerolls>0)this.button('reroll',`换一组 · 剩 ${r.rerolls} 次`,20,705,350,50);
+  else this.text('本次已选的军策不会重复出现',195,729,12,P.muted,'center');
+ }
+ map(){
+  const r=this.a.p.run,zone=M.zoneFor(r);this.header(zone===2?'守将就在前方':zone===0?'穿过青石山道':'进军关外营垒',zone===2?'击败守将，带回本次全部收获':'每段三选二 · 可以绕开不利的敌人','camp');
+  const x=55;this.line(x,157,x,604,P.line,2);
+  M.nodes(r).forEach((n,i)=>{const y=157+i*148,done=r.won.includes(n.id),kind=n.kind==='rescue'?'救援':n.kind==='elite'?'精英':n.kind==='boss'?'决战':'交锋';
+   this.circle(x,y+55,22,done?P.gold:P.light);this.text(done?'✓':i+1,x,y+55,18,done?P.bg:P.gold,'center','600');
+   this.panel(90,y,278,126);this.text(n.name,107,y+26,20,done?P.muted:P.ink,'left','600');this.text(`${kind} · ${n.count*n.types.length} 兵 · ${N[n.hero]}`,107,y+55,12,P.muted);
+   n.types.forEach((type,j)=>this.weapon(type,121+j*47,y+82,.5,done?P.muted:P.gold));
+   this.text(done?'已完成':n.kind==='rescue'?(r.augments.includes('mend')?'获额外重选 + 军功 2':'获治疗军策 + 军功 2'):`军功 ${n.reward} · 战后军策三选一`,107,y+109,11,done?P.muted:P.gold);
+   if(!done)this.hit(`node:${n.id}`,90,y,278,126);
+  });
+  this.text(`已胜 ${r.won.length} / 5 战 · 暂存 ${r.bank} 军功`,195,646,14,P.gold,'center');
+  this.small('open:build',`军策 ${r.augments.length}`,20,706,169);this.small('open:cashout','结束并结算',201,706,169);
+ }
+ camp(){
+  const p=this.a.p;this.header('军旗归营',`军功 ${p.coins} · ${p.clears?'已完成 '+p.clears+' 次征途':p.tutorial===6?'试炼已完成，下一程由你选择':'军营试炼 '+p.tutorial+' / 6'}`);
+  this.scenery(150,350);
+  // Camp silhouettes and banner keep the entry grounded in the world.
+  const c=this.c;for(const [x,y,s]of [[76,347,1],[264,327,.9],[177,411,.75]]){c.fillStyle='#c8bb8b';c.beginPath();c.moveTo(x-48*s,y);c.lineTo(x,y-66*s);c.lineTo(x+48*s,y);c.closePath();c.fill();c.fillStyle='#6c6c48';c.beginPath();c.moveTo(x,y-66*s);c.lineTo(x+48*s,y);c.lineTo(x+11*s,y);c.closePath();c.fill();this.box(x-8*s,y-25*s,16*s,26*s,'#324e36',1);}
+  this.line(193,202,193,364,'#dcc68f',3);this.box(195,208,64,64,'#365b44',2,P.gold);this.text('夺',226,240,37,P.gold,'center','600');
+  this.text(p.summary?p.summary.won?'青石关，拿下了':'此行有所收获':'下一次，会是什么组合？',195,538,23,P.ink,'center','600');
+  this.text(p.summary?`完成 ${p.summary.battles} 战 · 带回 ${p.summary.reward} 军功`:'英雄定方向，兵种成军，军策带来变化。',195,575,13,P.muted,'center');
+  if(p.tutorial===6&&!p.run)this.small('training','修习与兵营  ›',20,625,350);
+  else if(p.run)this.text('当前进度已保存，可随时继续',195,651,13,P.muted,'center');
+  this.primary(p.run?'resume':p.tutorial<6?'begin':'journey',p.run?'继续这次出征  ›':p.tutorial<6?'继续军营试炼  ›':'出征 · 新的随机路线  ›');
+ }
+ training(){
+  const p=this.a.p;this.header('修习与兵营',`军功 ${p.coins} · 成长永久保留`,'camp');
+  TRAINING.forEach((t,i)=>{const y=157+i*126,rank=p.training[t.id],max=rank>=t.max,can=p.coins>=t.cost&&!max;this.panel(20,y,350,111);this.circle(53,y+34,21,P.light);this.text(t.icon,53,y+34,22,P.gold,'center');this.text(t.name,89,y+27,20,P.ink,'left','600');this.text(`${rank} / ${t.max}`,346,y+27,12,P.muted,'right');this.text(t.detail,38,y+67,12,P.muted);this.text(max?'已完成':`需要 ${t.cost} 军功`,38,y+92,12,P.gold);if(!max)this.button(`train:${t.id}`,can?'修习':'军功不足',256,y+77,98,29,can,true&&!can);});
+  this.text('数值最多 +9%；新阵型与重选增加选择。',195,697,12,P.muted,'center');this.primary('camp','返回营地');
+ }
+ sheet(){
+  const a=this.a,p=a.p,r=p.run,s=a.sheet,c=this.c;c.fillStyle='#06140ee8';c.fillRect(0,0,390,780);a.hits=[];this.box(12,128,366,638,P.bg,20,P.line);this.text('×',350,155,24,P.muted,'center');this.hit('close',326,134,44,44);
+  if(s==='hero'){
+   this.text('选择主将',32,161,23,P.ink,'left','600');HEROES.forEach((h,i)=>{const y=211+i*151;this.panel(26,y,338,134);this.portrait(h.id,65,y+49,24);this.text(N[h.id],106,y+29,23,P.ink,'left','600');this.text(h.role,106,y+59,14,P.gold);this.text(h.detail,42,y+92,13,P.ink);this.text(h.skill,42,y+116,11,P.muted);this.hit(`hero:${h.id}`,26,y,338,134);});
+  }else if(s==='troops'){
+   this.text('选择编队，再换兵',32,161,22,P.ink,'left','600');r.config.troops.forEach((t,i)=>{const x=24+i*69;this.box(x,210,65,72,i===a.selection?P.light:P.panel,9,i===a.selection?P.gold:null);this.weapon(t,x+32,235,.7);this.text(`${i+1} ${SHORT[t]}`,x+32,265,12,P.ink,'center');this.hit(`slot:${i}`,x,210,65,72);});
+   M.unlocked(p).troops.forEach((t,i)=>{const y=309+i*81;this.panel(24,y,342,70);this.weapon(t,55,y+32,.8);this.text(N[t],92,y+22,18,P.ink,'left','600');this.text(ROLES[t],92,y+49,12,P.muted);if(r.config.troops[a.selection]===t)this.text('✓',345,y+30,20,P.gold,'center');this.hit(`troop:${t}`,24,y,342,70);});
+   this.button('close','编队完成',24,696,342,48,true);
+  }else if(s==='formation'){
+   this.text('选择阵型',32,161,23,P.ink,'left','600');const tags={balanced:'各路展开，均衡接敌',shieldWall:'前排聚拢，保护弓阵',wings:'两翼展开，侧面突进',spearhead:'集中尖端，抢先破阵'};
+   M.unlocked(p).formations.forEach((id,i)=>{const y=211+i*126;this.panel(24,y,342,108);const army=M.B.roster({...r.config,preset:id,positions:null});army.filter(s=>s.type!=='commander').forEach(q=>{this.circle(36+q.x*4.3,y+10+q.y*4.7,5,P.gold);});this.text(N[id],122,y+30,21,P.ink,'left','600');this.text(tags[id],122,y+62,12,P.muted);this.text(id===r.config.preset?'当前阵型':'选择 ›',122,y+88,12,P.gold);this.hit(`formation:${id}`,24,y,342,108);});
+  }else if(s==='build'){
+   this.text('本次军策',32,161,23,P.ink,'left','600');if(!r.augments.length)this.text('打赢下一场，选择第一枚军策。',32,224,14,P.muted);
+   r.augments.forEach((id,i)=>{const q=AUGMENTS.find(a=>a.id===id),y=205+i*78;this.text(q.name,32,y,17,P.gold,'left','600');q.lines.forEach((line,j)=>this.text(line,32,y+25+j*19,12,P.muted));});
+  }else if(s==='retreat'){
+   this.text('暂时撤军？',32,161,24,P.ink);this.text('本场不结算，可重新布阵再战。',195,340,16,P.muted,'center');this.text('兵力与已经获得的军策都会保留。',195,376,13,P.muted,'center');this.button('close','继续战斗',32,590,326,52,true);this.button('leaveBattle','撤回布阵',32,659,326,52);
+  }else if(s==='cashout'){
+   this.text('带着收获回营',32,161,24,P.ink);this.text(`军功 +${r.bank}`,195,334,34,P.gold,'center','600');this.text('当前征途结束，军策随本次旅程消散。',195,400,13,P.muted,'center');this.text('已解锁兵种与永久成长都会保留。',195,431,13,P.muted,'center');this.button('cashout','结算并回营',32,590,326,52,true);this.button('close','继续出征',32,659,326,52);
+  }
+ }
+ draw(){
+  const a=this.a,c=this.c;a.hits=[];c.fillStyle=P.bg;c.fillRect(0,0,390,780);
+  ({welcome:()=>this.welcome(),ready:()=>this.ready(),battle:()=>this.battle(),result:()=>this.result(),reward:()=>this.reward(),map:()=>this.map(),camp:()=>this.camp(),training:()=>this.training()}[a.screen]||(()=>this.camp()))();
+  if(a.sheet)this.sheet();if(a.saveError)this.text('存档不可用，请勿关闭此页',195,775,10,P.red,'center');
+  if(a.toast&&a.toast.until>a.now){this.box(22,15,346,40,P.gold,10);this.text(a.toast.text,195,35,13,P.bg,'center');}
+ }
+ guideSnapshot(){return null;}
+}
+module.exports={RogueView};
+
+},
+"src/rogue/app.js":function(require,module,exports){
+const M=require('./model.js');
+const {RogueView}=require('./view.js');
+function createGame({canvas,load=()=>null,save=()=>{},now=()=>Date.now()}){
+ let raw;try{raw=load(M.KEY);}catch(_){}
+ const p=M.clean(raw),a={p,screen:p.run?p.run.phase:p.tutorial===0?'welcome':'camp',now:0,hits:[],sheet:null,selection:0,run:null,speed:2,paused:false,saveError:false,toast:null};
+ const view=new RogueView(canvas.getContext('2d'),a);
+ function persist(){try{save(M.KEY,M.clone(p));a.saveError=false;}catch(_){a.saveError=true;}}
+  function sync(){a.screen=p.run?p.run.phase:'camp';a.sheet=null;a.toast=null;view.previewKey=null;persist();}
+ function dispatch(id){
+  const [kind,val]=id.split(':'),r=p.run;
+  if(kind==='begin'){if(!p.run)M.startTutorialRun(p);sync();return;}
+  if(kind==='resume'){sync();return;}
+  if(kind==='journey'){if(M.startJourney(p,now())){p.summary=null;sync();}return;}
+  if(kind==='node'){if(M.selectNode(p,val))sync();return;}
+  if(kind==='map'){if(M.changeRoute(p))sync();return;}
+  if(kind==='start'&&r?.phase==='ready'){
+   const battle=M.build(p);r.phase='fighting';a.run={battle};a.screen='battle';a.paused=false;a.sheet=null;view.resetBattle();persist();return;
+  }
+  if(kind==='next'){if(M.next(p))sync();return;}
+  if(kind==='retry'){if(M.retry(p))sync();return;}
+  if(kind==='augment'){if(M.choose(p,val))sync();return;}
+  if(kind==='reroll'){if(M.reroll(p))sync();return;}
+  if(kind==='speed'){a.speed=a.speed===1?2:a.speed===2?4:1;return;}
+  if(kind==='pause'){a.paused=!a.paused;return;}
+  if(kind==='open'){
+   if(['hero','troops','formation'].includes(val)&&r?.phase!=='ready')return;
+   a.sheet=val;if(val==='troops')a.selection=Math.max(0,Math.min(r.config.troops.length-1,Number(id.split(':')[2])||0));return;
+  }
+  if(kind==='close'){a.sheet=null;return;}
+  if(kind==='slot'&&a.sheet==='troops'){a.selection=Number(val);return;}
+  if(['hero','troop','formation'].includes(kind)&&r?.phase==='ready'){
+   const u=M.unlocked(p);
+   if(kind==='hero'&&a.sheet==='hero'&&u.heroes.includes(val)){r.config.heroId=val;a.sheet=null;}
+   if(kind==='troop'&&a.sheet==='troops'&&u.troops.includes(val)&&a.selection<r.config.troops.length)r.config.troops[a.selection]=val;
+   if(kind==='formation'&&a.sheet==='formation'&&u.formations.includes(val)){r.config=M.B.reflow({...r.config,preset:val});a.sheet=null;}
+   p.config=M.clone(r.config);view.previewKey=null;persist();return;
+  }
+  if(kind==='leaveBattle'&&a.screen==='battle'){r.phase='ready';a.run=null;sync();return;}
+  if(kind==='camp'&&a.screen!=='battle'){a.screen='camp';a.sheet=null;persist();return;}
+  if(kind==='cashout'&&a.sheet==='cashout'){if(M.cashOut(p)){a.screen='camp';a.sheet=null;persist();}return;}
+  if(kind==='train'&&a.screen==='training'){if(M.train(p,val)){a.toast={text:'修习完成，下次出征生效',until:a.now+2};persist();}return;}
+  if(kind==='training'&&!r&&p.tutorial===6){a.screen='training';return;}
+ }
+ function tick(dt){
+  if(!Number.isFinite(dt)||dt<=0)return;a.now+=Math.min(dt,.5);
+  if(a.screen==='battle'&&!a.paused&&!a.sheet){M.B.step(a.run.battle,Math.min(.5,dt*a.speed));if(a.run.battle.status!=='running'){M.settle(p,a.run.battle);sync();}}
+ }
+ function touch(x,y){view.draw();const h=[...a.hits].reverse().find(h=>x>=h.x&&x<=h.x+h.w&&y>=h.y&&y<=h.y+h.h);if(!h)return null;dispatch(h.id);view.draw();return h.id;}
+ function hide(){if(a.screen==='battle')a.paused=true;persist();}
+ persist();return {state:a,view,dispatch,tick,touch,hide,persist,draw:()=>view.draw()};
+}
+module.exports={createGame};
+
+}},cache={};function load(id){if(cache[id])return cache[id].exports;const m={exports:{}};cache[id]=m;modules[id](relative=>{const parts=id.split('/');parts.pop();for(const p of relative.split('/')){if(p==='..')parts.pop();else if(p!=='.')parts.push(p);}return load(parts.join('/'));},m,m.exports);return m.exports;}globalThis.CommanderGame=load('src/app.js');globalThis.CommanderRogue=load('src/rogue/app.js');})();

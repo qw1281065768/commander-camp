@@ -1,5 +1,6 @@
 (()=>{const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');let scale=1,left=0,top=0,dpr=1,last=0;function read(key){try{return JSON.parse(localStorage.getItem(key)||'null');}catch(_){return null;}}
-const game=CommanderGame.createGame({canvas,load:read,legacy:read('commander-journey-v1'),save:(key,p)=>localStorage.setItem(key,JSON.stringify(p))});
+const api=new URLSearchParams(location.search).has('legacy')?CommanderGame:CommanderRogue;
+const game=api.createGame({canvas,load:read,legacy:read('commander-journey-v1'),save:(key,p)=>localStorage.setItem(key,JSON.stringify(p))});
 function resize(){const h=window.innerHeight,w=window.innerWidth;scale=Math.min(w/390,h/780,1.22);dpr=Math.min(3,devicePixelRatio||1);canvas.style.width=`${390*scale}px`;canvas.style.height=`${780*scale}px`;canvas.width=Math.round(390*scale*dpr);canvas.height=Math.round(780*scale*dpr);}
 resize();window.addEventListener('resize',resize);let down=null;canvas.addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY,id:e.pointerId};canvas.setPointerCapture(e.pointerId);});canvas.addEventListener('pointercancel',()=>down=null);canvas.addEventListener('pointerup',e=>{if(down&&e.pointerId===down.id&&Math.hypot(e.clientX-down.x,e.clientY-down.y)<18){const box=canvas.getBoundingClientRect();game.touch((e.clientX-box.left)/box.width*390,(e.clientY-box.top)/box.height*780);}down=null;});
 document.addEventListener('visibilitychange',()=>{last=0;if(document.hidden)game.hide();});window.addEventListener('pagehide',()=>game.hide());
